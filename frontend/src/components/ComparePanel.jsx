@@ -122,7 +122,7 @@ export default function ComparePanel({ providers }) {
           return (
             <div key={i} className="card overflow-hidden">
               <div className="px-3 py-2 border-b border-ink-700 flex items-center justify-between">
-                <div className="text-xs text-slate-700 truncate">
+                <div className="text-xs text-ink-200 truncate">
                   <span className="font-semibold">{prov?.name || '—'}</span>
                   <span className="text-ink-400"> · </span>
                   <span className="font-mono">{r.model || '—'}</span>

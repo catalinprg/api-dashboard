@@ -717,7 +717,7 @@ export default function LLMChat({ providers }) {
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
-            className="text-xs text-ink-400 hover:text-slate-900 flex items-center gap-1"
+            className="text-xs text-ink-400 hover:text-ink-100 flex items-center gap-1"
           >
             <span className={`transition-transform ${showAdvanced ? 'rotate-90' : ''}`}>▸</span>
             Advanced (system prompt, temperature, max tokens)
@@ -740,7 +740,7 @@ export default function LLMChat({ providers }) {
                 </div>
               </div>
               <div className="text-[11px] text-ink-400 leading-relaxed">
-                <div className="font-medium text-slate-700 mb-0.5">Temperature guide</div>
+                <div className="font-medium text-ink-200 mb-0.5">Temperature guide</div>
                 <div><span className="font-mono">0</span> — deterministic / factual</div>
                 <div><span className="font-mono">0.7</span> — balanced (default)</div>
                 <div><span className="font-mono">1.0+</span> — more creative / varied</div>
@@ -763,7 +763,7 @@ export default function LLMChat({ providers }) {
                   }}
                   placeholder='[{"type":"function","function":{"name":"get_weather","description":"...","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]'
                 />
-                <p className="text-[11px] text-ink-400 mt-1">OpenAI-compatible tool schemas. When the model emits <code className="font-mono text-slate-800">tool_calls</code>, you'll see them in the reply and can respond as a <code className="font-mono text-slate-800">tool</code> message.</p>
+                <p className="text-[11px] text-ink-400 mt-1">OpenAI-compatible tool schemas. When the model emits <code className="font-mono text-ink-200">tool_calls</code>, you'll see them in the reply and can respond as a <code className="font-mono text-ink-200">tool</code> message.</p>
               </div>
             </div>
           )}
@@ -779,7 +779,7 @@ export default function LLMChat({ providers }) {
               ☰ Chats
             </button>
             <div className="text-xs text-ink-400 truncate flex-1 min-w-0">
-              <span className="font-medium text-slate-700">{session?.name || 'New chat'}</span>
+              <span className="font-medium text-ink-200">{session?.name || 'New chat'}</span>
               {session?.messages?.length ? ` · ${session.messages.length} msg` : ''}
             </div>
             {(usageTotals.total > 0) && (
@@ -789,7 +789,7 @@ export default function LLMChat({ providers }) {
               </span>
             )}
             {((session?.messages?.length || 0) + transientMsgs.length) > 0 && (
-              <button className="text-xs text-ink-400 hover:text-slate-900 shrink-0" onClick={clearCurrent}>Clear</button>
+              <button className="text-xs text-ink-400 hover:text-ink-100 shrink-0" onClick={clearCurrent}>Clear</button>
             )}
           </div>
 
@@ -889,7 +889,7 @@ export default function LLMChat({ providers }) {
           <ResponseView response={lastResponse} loading={streaming && !streamText} />
         </div>
         <details className="lg:hidden card">
-          <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-ink-400 hover:text-slate-900">
+          <summary className="px-4 py-3 cursor-pointer text-sm font-medium text-ink-400 hover:text-ink-100">
             Raw request / response {lastResponse ? `· ${lastResponse.status_code || '—'}` : ''}
           </summary>
           <div className="p-3 pt-0">
@@ -912,7 +912,7 @@ function Bubble({ msg, onEdit, onRegenerate, onReplyAsTool }) {
       ? 'bg-accent text-white'
       : isTool
         ? 'bg-amber-50 border border-amber-300 text-amber-900'
-        : 'bg-white border border-ink-700 text-slate-900'
+        : 'bg-white border border-ink-700 text-ink-100'
 
   const content = msg.content
   const images = []
@@ -948,7 +948,7 @@ function Bubble({ msg, onEdit, onRegenerate, onReplyAsTool }) {
           <div className="mt-2 space-y-2">
             {toolCalls.map((tc, i) => (
               <div key={tc.id || i} className="rounded-md border border-ink-700 bg-ink-800/50 p-2 text-[11px] font-mono">
-                <div className="text-slate-800 font-semibold">
+                <div className="text-ink-200 font-semibold">
                   🔧 {tc.function?.name || tc.name || 'tool'}
                 </div>
                 <div className="text-ink-400 mt-1 whitespace-pre-wrap break-words">{tc.function?.arguments || tc.arguments || ''}</div>

@@ -182,7 +182,7 @@ export default function GenericRequest({ providers }) {
           {selectedEndpoint && (
             <div className="text-xs text-ink-400 font-mono bg-white border border-ink-700 rounded-md p-2 break-all">
               <span className={`mr-2 font-semibold ${methodColor(selectedEndpoint.method)}`}>{selectedEndpoint.method}</span>
-              <span className="text-slate-800">{previewUrl || '—'}</span>
+              <span className="text-ink-200">{previewUrl || '—'}</span>
             </div>
           )}
 
@@ -237,6 +237,6 @@ function methodColor(m) {
     PUT: 'text-amber-700',
     PATCH: 'text-amber-700',
     DELETE: 'text-red-700',
-    HEAD: 'text-slate-400',
-  }[m] || 'text-slate-400'
+    HEAD: 'text-ink-500',
+  }[m] || 'text-ink-500'
 }

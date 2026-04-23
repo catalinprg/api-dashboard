@@ -9,7 +9,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  color: #1f2230;
+  color: #1f1b10;
   overscroll-behavior-y: none;
 }
 
@@ -31,20 +31,20 @@ input, textarea, select { font-size: 16px; } /* prevent iOS zoom on focus */
     @apply btn bg-accent text-white hover:bg-accent-hover;
   }
   .btn-secondary {
-    @apply btn bg-ink-900 text-slate-900 hover:bg-ink-800 border border-ink-700;
+    @apply btn bg-ink-900 text-ink-100 hover:bg-ink-800 border border-ink-700;
   }
   .btn-ghost {
-    @apply btn text-slate-700 hover:text-slate-900 hover:bg-ink-800;
+    @apply btn text-ink-200 hover:text-ink-100 hover:bg-ink-800;
   }
   .btn-danger {
     @apply btn bg-red-600 text-white hover:bg-red-700;
   }
   .input, .textarea, .select {
-    @apply w-full rounded-md bg-white border border-ink-700 px-3 py-2 text-sm text-slate-900 placeholder:text-ink-500 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
+    @apply w-full rounded-md bg-white border border-ink-700 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
   }
   .textarea { @apply font-mono; }
   .label { @apply text-xs font-medium text-ink-400 uppercase tracking-wide mb-1 block; }
-  .card { @apply bg-ink-900 border border-ink-700 rounded-lg; }
+  .card { @apply bg-ink-900 border border-ink-700 rounded-lg shadow-panel; }
   .pill { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
   .kbd { @apply inline-block rounded border border-ink-700 bg-ink-800 px-1.5 py-0.5 text-[10px] font-mono text-ink-400; }
 }
