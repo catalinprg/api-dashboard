@@ -294,7 +294,12 @@ def create_provider(payload: schemas.ProviderCreate, db: Session = Depends(get_d
         api_key_encrypted=encrypt(payload.api_key.strip()) if payload.api_key else "",
     )
     for e in payload.endpoints:
-        provider.endpoints.append(models.Endpoint(**e.model_dump()))
+        data = e.model_dump()
+        api_key = data.pop("api_key", None)
+        ep = models.Endpoint(**data)
+        if api_key:
+            ep.api_key_encrypted = encrypt(api_key.strip())
+        provider.endpoints.append(ep)
     db.add(provider)
     db.commit()
     db.refresh(provider)
