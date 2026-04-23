@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Menu } from 'lucide-react'
 import Sidebar from './components/Sidebar.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
-import AIPanel from './components/AIPanel.jsx'
 import HTTPPanel from './components/HTTPPanel.jsx'
 import GraphQLPanel from './components/GraphQLPanel.jsx'
 import WebhookPanel from './components/WebhookPanel.jsx'
@@ -12,7 +11,6 @@ import AuthGate from './components/AuthGate.jsx'
 import { api } from './api.js'
 
 const VIEW_LABELS = {
-  ai: 'AI API',
   http: 'HTTP / REST',
   graphql: 'GraphQL',
   webhooks: 'Webhooks',
@@ -26,7 +24,7 @@ export default function App() {
 }
 
 function Shell({ user }) {
-  const [view, setView] = useState('ai')
+  const [view, setView] = useState('http')
   const [providers, setProviders] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -88,8 +86,6 @@ function Shell({ user }) {
           <AdminPanel providers={providers} reload={reload} />
         ) : view === 'history' ? (
           <HistoryPanel />
-        ) : view === 'http' ? (
-          <HTTPPanel providers={providers} />
         ) : view === 'graphql' ? (
           <GraphQLPanel providers={providers} />
         ) : view === 'webhooks' ? (
@@ -97,7 +93,7 @@ function Shell({ user }) {
         ) : view === 'scheduled' ? (
           <ScheduledPanel />
         ) : (
-          <AIPanel providers={providers} />
+          <HTTPPanel providers={providers} />
         )}
       </main>
     </div>

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import re
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -24,11 +24,9 @@ Base.metadata.create_all(bind=engine)
 def _migrate_schema() -> None:
     """Add columns that were introduced after initial DB creation."""
     insp = inspect(engine)
-    if "providers" in insp.get_table_names():
-        cols = {c["name"] for c in insp.get_columns("providers")}
-        with engine.begin() as conn:
-            if "models" not in cols:
-                conn.execute(text("ALTER TABLE providers ADD COLUMN models TEXT DEFAULT '[]'"))
+    with engine.begin() as conn:
+        if "providers" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("providers")}
             if "variables" not in cols:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN variables TEXT DEFAULT '{}'"))
             if "oauth_client_id" not in cols:
@@ -39,21 +37,23 @@ def _migrate_schema() -> None:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_scope TEXT DEFAULT ''"))
             if "oauth_auth_style" not in cols:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_auth_style TEXT DEFAULT 'body'"))
-    if "chat_sessions" in insp.get_table_names():
-        cols = {c["name"] for c in insp.get_columns("chat_sessions")}
-        with engine.begin() as conn:
-            if "tools_json" not in cols:
-                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN tools_json TEXT DEFAULT '[]'"))
-    if "chat_messages" in insp.get_table_names():
-        cols = {c["name"] for c in insp.get_columns("chat_messages")}
-        with engine.begin() as conn:
-            if "tool_calls_json" not in cols:
-                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN tool_calls_json TEXT DEFAULT ''"))
-            if "tool_call_id" not in cols:
-                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN tool_call_id TEXT DEFAULT ''"))
-    if "endpoints" in insp.get_table_names():
-        cols = {c["name"] for c in insp.get_columns("endpoints")}
-        with engine.begin() as conn:
+            # LLM/AI cleanup (one-shot). Drop legacy LLM providers (cascades to endpoints).
+            conn.execute(text("DELETE FROM providers WHERE kind = 'llm'"))
+            # Try to drop the legacy LLM-only columns. SQLite ≥3.35 supports
+            # ALTER TABLE … DROP COLUMN; older builds just get skipped.
+            for col in ("default_model", "models"):
+                if col in cols:
+                    try:
+                        conn.execute(text(f"ALTER TABLE providers DROP COLUMN {col}"))
+                    except Exception:
+                        pass
+        if "history" in insp.get_table_names():
+            conn.execute(text("DELETE FROM history WHERE kind = 'llm'"))
+        # Old chat tables are gone from the ORM — drop them so they stop showing up.
+        conn.execute(text("DROP TABLE IF EXISTS chat_messages"))
+        conn.execute(text("DROP TABLE IF EXISTS chat_sessions"))
+        if "endpoints" in insp.get_table_names():
+            cols = {c["name"] for c in insp.get_columns("endpoints")}
             if "api_key_encrypted" not in cols:
                 conn.execute(text("ALTER TABLE endpoints ADD COLUMN api_key_encrypted TEXT DEFAULT ''"))
             if "auth_mode" not in cols:
@@ -73,18 +73,6 @@ def _mask_key(encrypted: str) -> str:
     if len(key) <= 8:
         return "●●●●●●"
     return f"{key[:4]}…{key[-4:]}"
-
-
-def _parse_models(raw: Optional[str]) -> List[str]:
-    if not raw:
-        return []
-    try:
-        val = json.loads(raw)
-        if isinstance(val, list):
-            return [str(m) for m in val if str(m).strip()]
-    except Exception:
-        pass
-    return []
 
 
 def _parse_variables(raw: Optional[str]) -> Dict[str, str]:
@@ -246,8 +234,6 @@ def _provider_to_out(p: models.Provider) -> dict:
         "auth_header_name": p.auth_header_name,
         "auth_prefix": p.auth_prefix,
         "auth_query_param": p.auth_query_param,
-        "default_model": p.default_model,
-        "models": _parse_models(p.models),
         "extra_headers": p.extra_headers or "{}",
         "variables": getattr(p, "variables", None) or "{}",
         "oauth_client_id": getattr(p, "oauth_client_id", "") or "",
@@ -297,8 +283,6 @@ def create_provider(payload: schemas.ProviderCreate, db: Session = Depends(get_d
         auth_header_name=payload.auth_header_name,
         auth_prefix=payload.auth_prefix,
         auth_query_param=payload.auth_query_param,
-        default_model=payload.default_model,
-        models=json.dumps([m.strip() for m in (payload.models or []) if m.strip()]),
         extra_headers=payload.extra_headers or "{}",
         variables=payload.variables or "{}",
         oauth_client_id=payload.oauth_client_id,
@@ -342,9 +326,6 @@ def update_provider(provider_id: int, payload: schemas.ProviderUpdate, db: Sessi
             p.api_key_encrypted = ""
         else:
             p.api_key_encrypted = encrypt(new_key.strip())
-    if "models" in data:
-        mods = data.pop("models") or []
-        p.models = json.dumps([str(m).strip() for m in mods if str(m).strip()])
     for k, v in data.items():
         setattr(p, k, v)
     db.commit()
@@ -373,23 +354,18 @@ def ping_provider(provider_id: int, db: Session = Depends(get_db)):
     base = _subst_str((p.base_url or "").rstrip("/"), vars)
     headers = {k: _subst_str(str(v), vars) for k, v in headers.items()}
     _build_auth(p, headers, params, method="GET", url=base)
-    # Best-effort probe per provider kind
-    if p.kind == "llm":
-        url = f"{base}/models"
-        method = "GET"
-    else:
-        # pick first endpoint if configured, otherwise hit base_url
-        ep = p.endpoints[0] if p.endpoints else None
-        if ep:
-            path = ep.path
-            if path.startswith("http://") or path.startswith("https://"):
-                url = path
-            else:
-                url = f"{base}{'' if path.startswith('/') or not path else '/'}{path}" if base else path
-            method = (ep.method or "GET").upper()
+    # Best-effort probe: first endpoint if configured, otherwise the base URL.
+    ep = p.endpoints[0] if p.endpoints else None
+    if ep:
+        path = ep.path
+        if path.startswith("http://") or path.startswith("https://"):
+            url = path
         else:
-            url = base
-            method = "GET"
+            url = f"{base}{'' if path.startswith('/') or not path else '/'}{path}" if base else path
+        method = (ep.method or "GET").upper()
+    else:
+        url = base
+        method = "GET"
     if not url:
         return {"ok": False, "status_code": 0, "message": "No URL to probe"}
     url = _subst_str(url, vars)
@@ -837,130 +813,6 @@ def _parse_response(r: httpx.Response) -> schemas.InvokeResponse:
     )
 
 
-def _build_llm_request(provider: models.Provider, payload: schemas.LLMInvokeRequest):
-    headers = {"content-type": "application/json"}
-    try:
-        extra = json.loads(provider.extra_headers or "{}")
-        if isinstance(extra, dict):
-            headers.update({k: str(v) for k, v in extra.items()})
-    except Exception:
-        pass
-    params: dict = {}
-    _build_auth(provider, headers, params)
-
-    vars = _parse_variables(getattr(provider, "variables", None))
-    messages = _subst_any(payload.messages, vars)
-
-    is_anthropic_native = "api.anthropic.com" in provider.base_url
-    if is_anthropic_native:
-        system_msgs = [m["content"] for m in messages if m.get("role") == "system"]
-        chat_msgs = [m for m in messages if m.get("role") != "system"]
-        body = {
-            "model": payload.model or provider.default_model,
-            "messages": chat_msgs,
-            "max_tokens": payload.max_tokens or 4096,
-        }
-        if system_msgs:
-            body["system"] = "\n\n".join(system_msgs if all(isinstance(x, str) for x in system_msgs) else [str(x) for x in system_msgs])
-        if payload.temperature is not None:
-            body["temperature"] = payload.temperature
-        body.update(payload.extra)
-        url = provider.base_url.rstrip("/") + "/messages"
-    else:
-        body = {
-            "model": payload.model or provider.default_model,
-            "messages": messages,
-        }
-        if payload.temperature is not None:
-            body["temperature"] = payload.temperature
-        if payload.max_tokens is not None:
-            body["max_tokens"] = payload.max_tokens
-        if payload.tools:
-            body["tools"] = payload.tools
-        if payload.tool_choice is not None:
-            body["tool_choice"] = payload.tool_choice
-        body.update(payload.extra)
-        url = provider.base_url.rstrip("/") + "/chat/completions"
-    return url, headers, params, body, is_anthropic_native
-
-
-def _extract_assistant_text(response_body) -> str:
-    if not isinstance(response_body, dict):
-        return ""
-    choices = response_body.get("choices") or []
-    if choices:
-        msg = (choices[0] or {}).get("message") or {}
-        if isinstance(msg.get("content"), str):
-            return msg["content"]
-    content = response_body.get("content")
-    if isinstance(content, list):
-        return "\n".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
-    return ""
-
-
-@app.post("/api/invoke/llm", response_model=schemas.InvokeResponse)
-def invoke_llm(payload: schemas.LLMInvokeRequest, db: Session = Depends(get_db)):
-    provider = db.get(models.Provider, payload.provider_id)
-    if not provider or not provider.enabled:
-        raise HTTPException(400, "Provider not found or disabled")
-
-    url, headers, params, body, _is_anth = _build_llm_request(provider, payload)
-
-    echo = schemas.RequestEcho(
-        method="POST", url=url, headers=_mask_headers(headers), query=params,
-    )
-    start = time.time()
-    try:
-        with httpx.Client(timeout=120.0) as client:
-            r = client.post(url, headers=headers, params=params, json=body)
-    except httpx.HTTPError as exc:
-        err_out = schemas.InvokeResponse(
-            ok=False, status_code=0, latency_ms=int((time.time() - start) * 1000),
-            headers={}, body=None, error=str(exc), request=echo,
-        )
-        _log_history(
-            db, kind="llm", provider=provider,
-            label=body.get("model", ""),
-            request_dict={**echo.model_dump(), "body": body},
-            response=err_out,
-        )
-        return err_out
-    latency = int((time.time() - start) * 1000)
-    out = _parse_response(r)
-    out.latency_ms = latency
-    out.request = echo
-    _log_history(
-        db, kind="llm", provider=provider,
-        label=body.get("model", ""),
-        request_dict={**echo.model_dump(), "body": body},
-        response=out,
-    )
-    # Persist to session on non-streaming path (so the chat shows in sidebar sessions too)
-    if payload.session_id and out.ok:
-        try:
-            # Persist the newest appended message(s) we sent: the last user (or tool) message
-            last_msg = payload.messages[-1] if payload.messages else None
-            if last_msg and last_msg.get("role") in {"user", "tool"}:
-                _append_session_message(
-                    db, payload.session_id, last_msg.get("role"), last_msg.get("content", ""),
-                    tool_call_id=last_msg.get("tool_call_id") or None,
-                )
-            reply = _extract_assistant_text(out.body)
-            tool_calls = None
-            if isinstance(out.body, dict):
-                choices = out.body.get("choices") or []
-                if choices:
-                    msg = (choices[0] or {}).get("message") or {}
-                    tc = msg.get("tool_calls")
-                    if isinstance(tc, list) and tc:
-                        tool_calls = tc
-            if reply or tool_calls:
-                _append_session_message(db, payload.session_id, "assistant", reply or "", tool_calls=tool_calls)
-        except Exception:
-            pass
-    return out
-
-
 @app.post("/api/invoke/http", response_model=schemas.InvokeResponse)
 def invoke_http(payload: schemas.HTTPInvokeRequest, db: Session = Depends(get_db)):
     headers = {k: v for k, v in payload.headers.items()}
@@ -1158,338 +1010,6 @@ def invoke_graphql(payload: schemas.GraphQLInvokeRequest, db: Session = Depends(
     return out
 
 
-# ---------- Chat sessions ----------
-
-def _session_msg_to_out(m: models.ChatMessage) -> dict:
-    try:
-        content = json.loads(m.content_json) if m.content_json else ""
-    except Exception:
-        content = m.content_json or ""
-    tool_calls = None
-    raw_tc = getattr(m, "tool_calls_json", None)
-    if raw_tc:
-        try:
-            tc = json.loads(raw_tc)
-            if isinstance(tc, list) and tc:
-                tool_calls = tc
-        except Exception:
-            pass
-    out = {
-        "id": m.id,
-        "role": m.role,
-        "content": content,
-        "created_at": m.created_at.isoformat() if m.created_at else "",
-    }
-    if tool_calls:
-        out["tool_calls"] = tool_calls
-    tcid = getattr(m, "tool_call_id", None)
-    if tcid:
-        out["tool_call_id"] = tcid
-    return out
-
-
-def _session_to_out(s: models.ChatSession, include_messages: bool = False) -> dict:
-    try:
-        tools = json.loads(getattr(s, "tools_json", None) or "[]")
-        if not isinstance(tools, list): tools = []
-    except Exception:
-        tools = []
-    return {
-        "id": s.id,
-        "name": s.name or "New chat",
-        "provider_id": s.provider_id,
-        "model": s.model or "",
-        "system_prompt": s.system_prompt or "",
-        "temperature": s.temperature if s.temperature not in (None, "") else "0.7",
-        "max_tokens": s.max_tokens,
-        "tools": tools,
-        "created_at": s.created_at.isoformat() if s.created_at else "",
-        "updated_at": s.updated_at.isoformat() if s.updated_at else "",
-        "message_count": len(s.messages),
-        "messages": [_session_msg_to_out(m) for m in s.messages] if include_messages else [],
-    }
-
-
-@app.get("/api/sessions", response_model=List[schemas.ChatSessionOut])
-def list_sessions(db: Session = Depends(get_db)):
-    q = db.query(models.ChatSession).order_by(models.ChatSession.updated_at.desc()).all()
-    return [_session_to_out(s, include_messages=False) for s in q]
-
-
-@app.post("/api/sessions", response_model=schemas.ChatSessionOut)
-def create_session(payload: schemas.ChatSessionCreate, db: Session = Depends(get_db)):
-    data = payload.model_dump()
-    tools = data.pop("tools", [])
-    s = models.ChatSession(**data, tools_json=json.dumps(tools or []))
-    db.add(s)
-    db.commit()
-    db.refresh(s)
-    return _session_to_out(s, include_messages=True)
-
-
-@app.get("/api/sessions/{session_id}", response_model=schemas.ChatSessionOut)
-def get_session(session_id: int, db: Session = Depends(get_db)):
-    s = db.get(models.ChatSession, session_id)
-    if not s:
-        raise HTTPException(404, "Session not found")
-    return _session_to_out(s, include_messages=True)
-
-
-@app.patch("/api/sessions/{session_id}", response_model=schemas.ChatSessionOut)
-def update_session(session_id: int, payload: schemas.ChatSessionUpdate, db: Session = Depends(get_db)):
-    s = db.get(models.ChatSession, session_id)
-    if not s:
-        raise HTTPException(404, "Session not found")
-    data = payload.model_dump(exclude_unset=True)
-    if "tools" in data:
-        s.tools_json = json.dumps(data.pop("tools") or [])
-    for k, v in data.items():
-        setattr(s, k, v)
-    db.commit()
-    db.refresh(s)
-    return _session_to_out(s, include_messages=True)
-
-
-@app.delete("/api/sessions/{session_id}")
-def delete_session(session_id: int, db: Session = Depends(get_db)):
-    s = db.get(models.ChatSession, session_id)
-    if not s:
-        raise HTTPException(404, "Session not found")
-    db.delete(s)
-    db.commit()
-    return {"ok": True}
-
-
-@app.delete("/api/sessions/{session_id}/messages")
-def clear_session_messages(session_id: int, db: Session = Depends(get_db)):
-    s = db.get(models.ChatSession, session_id)
-    if not s:
-        raise HTTPException(404, "Session not found")
-    db.query(models.ChatMessage).filter(models.ChatMessage.session_id == session_id).delete()
-    db.commit()
-    return {"ok": True}
-
-
-@app.post("/api/sessions/{session_id}/truncate/{message_id}")
-def truncate_session_at(session_id: int, message_id: int, db: Session = Depends(get_db)):
-    """Delete all messages in the session with id > message_id (used for regen/edit)."""
-    s = db.get(models.ChatSession, session_id)
-    if not s:
-        raise HTTPException(404, "Session not found")
-    db.query(models.ChatMessage).filter(
-        models.ChatMessage.session_id == session_id,
-        models.ChatMessage.id > message_id,
-    ).delete()
-    db.commit()
-    return {"ok": True}
-
-
-@app.patch("/api/sessions/{session_id}/messages/{message_id}")
-def edit_session_message(
-    session_id: int,
-    message_id: int,
-    payload: Dict[str, Any],
-    db: Session = Depends(get_db),
-):
-    m = db.get(models.ChatMessage, message_id)
-    if not m or m.session_id != session_id:
-        raise HTTPException(404, "Message not found")
-    if "content" in payload:
-        m.content_json = json.dumps(payload["content"], default=str)
-    # bump session.updated_at so the sidebar reflects recent activity
-    s = db.get(models.ChatSession, session_id)
-    if s:
-        from datetime import datetime as _dt
-        s.updated_at = _dt.utcnow()
-    db.commit()
-    return _session_msg_to_out(m)
-
-
-@app.delete("/api/sessions/{session_id}/messages/{message_id}")
-def delete_session_message(session_id: int, message_id: int, db: Session = Depends(get_db)):
-    m = db.get(models.ChatMessage, message_id)
-    if not m or m.session_id != session_id:
-        raise HTTPException(404, "Message not found")
-    db.delete(m)
-    db.commit()
-    return {"ok": True}
-
-
-def _append_session_message(
-    db: Session,
-    session_id: int,
-    role: str,
-    content: Any,
-    *,
-    tool_calls: Optional[list] = None,
-    tool_call_id: Optional[str] = None,
-) -> None:
-    m = models.ChatMessage(
-        session_id=session_id,
-        role=role,
-        content_json=json.dumps(content, default=str) if content is not None else "",
-        tool_calls_json=json.dumps(tool_calls) if tool_calls else "",
-        tool_call_id=tool_call_id or "",
-    )
-    db.add(m)
-    # bump session.updated_at
-    s = db.get(models.ChatSession, session_id)
-    if s:
-        from datetime import datetime as _dt
-        s.updated_at = _dt.utcnow()
-    db.commit()
-
-
-# ---------- Streaming LLM ----------
-
-@app.post("/api/invoke/llm/stream")
-def invoke_llm_stream(payload: schemas.LLMInvokeRequest, db: Session = Depends(get_db)):
-    provider = db.get(models.Provider, payload.provider_id)
-    if not provider or not provider.enabled:
-        raise HTTPException(400, "Provider not found or disabled")
-
-    url, headers, params, body, is_anth = _build_llm_request(provider, payload)
-    body["stream"] = True
-    # OpenAI-compat providers: ask for usage in the final stream chunk
-    if not is_anth:
-        body.setdefault("stream_options", {"include_usage": True})
-
-    echo = schemas.RequestEcho(
-        method="POST", url=url, headers=_mask_headers(headers), query=params,
-    )
-
-    if payload.session_id:
-        # persist only the message we're appending this turn — last user or tool msg
-        last_msg = payload.messages[-1] if payload.messages else None
-        if last_msg and last_msg.get("role") in {"user", "tool"}:
-            _append_session_message(
-                db, payload.session_id, last_msg.get("role"), last_msg.get("content", ""),
-                tool_call_id=last_msg.get("tool_call_id") or None,
-            )
-
-    def _event(data: dict) -> bytes:
-        return f"data: {json.dumps(data)}\n\n".encode()
-
-    def gen():
-        start = time.time()
-        yield _event({"type": "start", "request": echo.model_dump()})
-        full_text_parts: List[str] = []
-        tool_calls_acc: dict = {}  # keyed by index
-        last_status = 0
-        error_msg: Optional[str] = None
-        try:
-            with httpx.Client(timeout=None) as client:
-                with client.stream("POST", url, headers=headers, params=params, json=body) as r:
-                    last_status = r.status_code
-                    if r.status_code >= 400:
-                        # read full body and emit as error
-                        err_body = r.read().decode("utf-8", errors="replace")
-                        try:
-                            parsed = json.loads(err_body)
-                        except Exception:
-                            parsed = err_body
-                        yield _event({"type": "error", "status_code": r.status_code, "body": parsed})
-                        full_text_parts.append(err_body)
-                        return
-                    for line in r.iter_lines():
-                        if not line:
-                            continue
-                        s = line.strip()
-                        if s.startswith("data:"):
-                            s = s[5:].strip()
-                        if s == "[DONE]":
-                            break
-                        if not s:
-                            continue
-                        try:
-                            event = json.loads(s)
-                        except Exception:
-                            # not JSON, forward raw
-                            yield _event({"type": "raw", "data": s})
-                            continue
-                        # Extract text delta across provider shapes
-                        delta_text = ""
-                        if is_anth:
-                            ev_type = event.get("type")
-                            if ev_type == "content_block_delta":
-                                d = event.get("delta") or {}
-                                if d.get("type") == "text_delta":
-                                    delta_text = d.get("text", "") or ""
-                        else:
-                            choices = event.get("choices") or []
-                            if choices:
-                                d = choices[0].get("delta") or {}
-                                delta_text = d.get("content") or ""
-                        if delta_text:
-                            full_text_parts.append(delta_text)
-                            yield _event({"type": "delta", "text": delta_text})
-                        # Forward usage if present (OpenAI-compat final chunk has `usage`)
-                        usage = event.get("usage") if isinstance(event, dict) else None
-                        if usage:
-                            yield _event({"type": "usage", "usage": usage})
-                        # Forward tool_calls chunks (OpenAI-compat: choices[0].delta.tool_calls)
-                        tc_delta = None
-                        if not is_anth:
-                            choices_ = event.get("choices") or []
-                            if choices_:
-                                d = choices_[0].get("delta") or {}
-                                tc_delta = d.get("tool_calls")
-                        if tc_delta:
-                            yield _event({"type": "tool_calls", "delta": tc_delta})
-                            # Accumulate on the server too so we can persist
-                            for d in tc_delta:
-                                try:
-                                    idx = d.get("index", 0) if isinstance(d, dict) else 0
-                                except Exception:
-                                    idx = 0
-                                slot = tool_calls_acc.get(idx) or {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
-                                if isinstance(d, dict):
-                                    if d.get("id"): slot["id"] = d["id"]
-                                    if d.get("type"): slot["type"] = d["type"]
-                                    f = d.get("function") or {}
-                                    if isinstance(f, dict):
-                                        if f.get("name"): slot["function"]["name"] = (slot["function"].get("name") or "") + f["name"]
-                                        if f.get("arguments"): slot["function"]["arguments"] = (slot["function"].get("arguments") or "") + f["arguments"]
-                                tool_calls_acc[idx] = slot
-                        if not delta_text and not usage and not tc_delta:
-                            yield _event({"type": "event", "data": event})
-        except httpx.HTTPError as exc:
-            error_msg = str(exc)
-            yield _event({"type": "error", "error": error_msg})
-        latency = int((time.time() - start) * 1000)
-        full_text = "".join(full_text_parts)
-        yield _event({
-            "type": "done",
-            "text": full_text,
-            "status_code": last_status,
-            "latency_ms": latency,
-        })
-
-        # Log to history + session after stream ends
-        try:
-            fake_response = schemas.InvokeResponse(
-                ok=(last_status == 200 and not error_msg),
-                status_code=last_status,
-                latency_ms=latency,
-                headers={},
-                body={"text": full_text},
-                error=error_msg,
-                request=echo,
-            )
-            _log_history(
-                db, kind="llm", provider=provider,
-                label=body.get("model", ""),
-                request_dict={**echo.model_dump(), "body": body},
-                response=fake_response,
-            )
-            if payload.session_id and (full_text or tool_calls_acc):
-                tc_list = [tool_calls_acc[k] for k in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
-                _append_session_message(db, payload.session_id, "assistant", full_text, tool_calls=tc_list)
-        except Exception:
-            pass
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
 
 # ---------- Export / Import ----------
 
@@ -1505,8 +1025,6 @@ def export_config(include_keys: bool = True, db: Session = Depends(get_db)):
             "auth_header_name": p.auth_header_name,
             "auth_prefix": p.auth_prefix,
             "auth_query_param": p.auth_query_param,
-            "default_model": p.default_model,
-            "models": _parse_models(p.models),
             "extra_headers": p.extra_headers or "{}",
             "variables": getattr(p, "variables", None) or "{}",
             "enabled": p.enabled,
@@ -1666,6 +1184,10 @@ def import_config(payload: Dict[str, Any], db: Session = Depends(get_db)):
         if not name:
             skipped += 1
             continue
+        # LLM providers are no longer supported — silently drop them on import.
+        if (prov or {}).get("kind") == "llm":
+            skipped += 1
+            continue
         exists = db.query(models.Provider).filter(models.Provider.name == name).first()
         if exists:
             skipped += 1
@@ -1678,8 +1200,6 @@ def import_config(payload: Dict[str, Any], db: Session = Depends(get_db)):
             auth_header_name=prov.get("auth_header_name", "Authorization"),
             auth_prefix=prov.get("auth_prefix", "Bearer "),
             auth_query_param=prov.get("auth_query_param", ""),
-            default_model=prov.get("default_model", ""),
-            models=json.dumps(prov.get("models") or []),
             extra_headers=prov.get("extra_headers", "{}") or "{}",
             variables=prov.get("variables", "{}") or "{}",
             enabled=bool(prov.get("enabled", True)),

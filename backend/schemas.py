@@ -26,14 +26,12 @@ class EndpointOut(EndpointBase):
 
 class ProviderBase(BaseModel):
     name: str
-    kind: str = "llm"  # llm | http
+    kind: str = "http"  # http | graphql
     base_url: str
     auth_type: str = "bearer"
     auth_header_name: str = "Authorization"
     auth_prefix: str = "Bearer "
     auth_query_param: str = ""
-    default_model: str = ""
-    models: List[str] = Field(default_factory=list)
     extra_headers: str = "{}"
     variables: str = "{}"  # JSON string of {var_name: value}
     # OAuth 2.0 client-credentials (client_secret lives in api_key)
@@ -58,8 +56,6 @@ class ProviderUpdate(BaseModel):
     auth_header_name: Optional[str] = None
     auth_prefix: Optional[str] = None
     auth_query_param: Optional[str] = None
-    default_model: Optional[str] = None
-    models: Optional[List[str]] = None
     extra_headers: Optional[str] = None
     variables: Optional[str] = None
     oauth_client_id: Optional[str] = None
@@ -79,58 +75,6 @@ class ProviderOut(ProviderBase):
 
     class Config:
         from_attributes = True
-
-
-class LLMInvokeRequest(BaseModel):
-    provider_id: int
-    session_id: Optional[int] = None  # if set, message is saved and assistant reply appended
-    model: Optional[str] = None
-    messages: List[Dict[str, Any]]
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    stream: bool = False
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_choice: Optional[Any] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ChatMessageOut(BaseModel):
-    id: int
-    role: str
-    content: Any
-    created_at: str
-
-
-class ChatSessionBase(BaseModel):
-    name: str = "New chat"
-    provider_id: Optional[int] = None
-    model: str = ""
-    system_prompt: str = ""
-    temperature: str = "0.7"
-    max_tokens: Optional[int] = None
-    tools: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-class ChatSessionCreate(ChatSessionBase):
-    pass
-
-
-class ChatSessionUpdate(BaseModel):
-    name: Optional[str] = None
-    provider_id: Optional[int] = None
-    model: Optional[str] = None
-    system_prompt: Optional[str] = None
-    temperature: Optional[str] = None
-    max_tokens: Optional[int] = None
-    tools: Optional[List[Dict[str, Any]]] = None
-
-
-class ChatSessionOut(ChatSessionBase):
-    id: int
-    created_at: str
-    updated_at: str
-    message_count: int = 0
-    messages: List[ChatMessageOut] = []
 
 
 class HTTPInvokeRequest(BaseModel):

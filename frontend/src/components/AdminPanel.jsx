@@ -43,7 +43,7 @@ export default function AdminPanel({ providers, reload }) {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 md:mb-6">
           <div>
             <h1 className="text-lg md:text-xl font-semibold">Providers</h1>
-            <p className="text-xs md:text-sm text-ink-400 mt-0.5 md:mt-1">Configure APIs you want to use in the playground.</p>
+            <p className="text-xs md:text-sm text-ink-400 mt-0.5 md:mt-1">Configure the APIs you want to call from the HTTP and GraphQL panels.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <ExportImport reload={reload} />
@@ -72,8 +72,8 @@ export default function AdminPanel({ providers, reload }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="font-semibold">{p.name}</div>
-                    <span className={`pill ${p.kind === 'llm' ? 'bg-accent/15 text-accent' : 'bg-blue-500/15 text-blue-700'}`}>
-                      {p.kind === 'llm' ? 'LLM' : 'HTTP'}
+                    <span className={`pill ${p.kind === 'graphql' ? 'bg-accent/15 text-accent' : 'bg-blue-500/15 text-blue-700'}`}>
+                      {p.kind === 'graphql' ? 'GraphQL' : 'HTTP'}
                     </span>
                     {p.has_api_key ? (
                       <span className="pill bg-emerald-500/15 text-emerald-700">● key set</span>
@@ -83,9 +83,6 @@ export default function AdminPanel({ providers, reload }) {
                     {!p.enabled && <span className="pill bg-ink-700 text-ink-400">disabled</span>}
                   </div>
                   <div className="text-xs text-ink-400 font-mono mt-1 truncate">{p.base_url || '—'}</div>
-                  {p.default_model && (
-                    <div className="text-xs text-ink-400 mt-1">default model: <span className="font-mono text-ink-200">{p.default_model}</span></div>
-                  )}
                   {p.notes && <div className="text-xs text-ink-400 mt-2">{p.notes}</div>}
                   {pings[p.id] && (
                     <div className={`text-xs mt-2 font-mono ${pings[p.id].ok ? 'text-emerald-700' : 'text-red-700'}`}>
