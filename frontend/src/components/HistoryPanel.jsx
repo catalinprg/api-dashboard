@@ -82,7 +82,7 @@ export default function HistoryPanel() {
               <button
                 key={v}
                 onClick={() => setFilter(v)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition shrink-0 ${filter === v ? 'bg-accent text-white' : 'text-ink-400 hover:text-slate-900'}`}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition shrink-0 ${filter === v ? 'bg-accent text-white' : 'text-ink-400 hover:text-ink-100'}`}
               >
                 {label}
               </button>
@@ -129,7 +129,7 @@ function HistoryRow({ item, open, onToggle, onDelete }) {
         </div>
         <div className="text-xs text-ink-400 font-mono mt-1 break-all line-clamp-2">{item.label}</div>
         <div className="flex items-center gap-3 text-[11px] text-ink-400 mt-1 flex-wrap">
-          <span className="font-mono">status: <span className="text-slate-800">{item.status_code || '—'}</span></span>
+          <span className="font-mono">status: <span className="text-ink-200">{item.status_code || '—'}</span></span>
           <span className="font-mono">{item.latency_ms}ms</span>
           <span>{when}</span>
         </div>
@@ -167,8 +167,8 @@ function CurlBtn({ request }) {
 function Section({ title, data }) {
   return (
     <details open>
-      <summary className="text-xs text-ink-400 font-medium cursor-pointer hover:text-slate-900 mb-1">{title}</summary>
-      <pre className="text-[11px] font-mono text-slate-900 bg-white border border-ink-700 rounded-md p-2 overflow-auto max-h-64 whitespace-pre-wrap break-words">
+      <summary className="text-xs text-ink-400 font-medium cursor-pointer hover:text-ink-100 mb-1">{title}</summary>
+      <pre className="text-[11px] font-mono text-ink-100 bg-white border border-ink-700 rounded-md p-2 overflow-auto max-h-64 whitespace-pre-wrap break-words">
         {JSON.stringify(data, null, 2)}
       </pre>
     </details>

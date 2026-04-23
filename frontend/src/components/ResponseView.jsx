@@ -28,13 +28,13 @@ export default function ResponseView({ response, loading }) {
           <div className="p-3 text-xs font-mono space-y-1">
             <div>
               <span className="text-accent font-semibold mr-2">{request.method}</span>
-              <span className="text-slate-900 break-all">{request.url}</span>
+              <span className="text-ink-100 break-all">{request.url}</span>
             </div>
             {Object.entries(request.headers || {}).length > 0 && (
               <div className="pt-2 border-t border-ink-700/60 mt-2">
                 {Object.entries(request.headers).map(([k, v]) => (
                   <div key={k} className="text-ink-400 break-all">
-                    <span className="text-slate-800">{k}</span>: {v}
+                    <span className="text-ink-200">{k}</span>: {v}
                   </div>
                 ))}
               </div>
@@ -43,14 +43,14 @@ export default function ResponseView({ response, loading }) {
               <div className="pt-2 border-t border-ink-700/60 mt-2">
                 <div className="text-ink-400 mb-1">Query:</div>
                 {Object.entries(request.query).map(([k, v]) => (
-                  <div key={k} className="text-ink-400"><span className="text-slate-800">{k}</span>={v}</div>
+                  <div key={k} className="text-ink-400"><span className="text-ink-200">{k}</span>={v}</div>
                 ))}
               </div>
             )}
             {request.body != null && (
               <div className="pt-2 border-t border-ink-700/60 mt-2">
                 <div className="text-ink-400 mb-1">Body:</div>
-                <pre className="text-slate-800 whitespace-pre-wrap break-words">
+                <pre className="text-ink-200 whitespace-pre-wrap break-words">
                   {typeof request.body === 'string' ? request.body : JSON.stringify(request.body, null, 2)}
                 </pre>
               </div>
@@ -64,24 +64,24 @@ export default function ResponseView({ response, loading }) {
           <span className={`pill ${ok ? 'bg-emerald-500/15 text-emerald-700' : 'bg-red-500/15 text-red-700'}`}>
             {ok ? '● OK' : '● ERROR'}
           </span>
-          <span className="text-ink-400">Status: <span className="text-slate-900 font-mono">{status_code}</span></span>
-          <span className="text-ink-400">Latency: <span className="text-slate-900 font-mono">{latency_ms}ms</span></span>
+          <span className="text-ink-400">Status: <span className="text-ink-100 font-mono">{status_code}</span></span>
+          <span className="text-ink-400">Latency: <span className="text-ink-100 font-mono">{latency_ms}ms</span></span>
         </div>
         {error && (
           <div className="px-4 py-3 text-red-700 text-sm border-b border-ink-700 font-mono">{error}</div>
         )}
         <details open={!ok}>
-          <summary className="px-4 py-2 text-xs text-ink-400 cursor-pointer hover:text-slate-900 border-b border-ink-700">
+          <summary className="px-4 py-2 text-xs text-ink-400 cursor-pointer hover:text-ink-100 border-b border-ink-700">
             Response body {typeof body === 'object' && body !== null ? `(${Object.keys(body).length} fields)` : ''}
           </summary>
           <div className="p-4">
-            <pre className="text-xs font-mono text-slate-900 overflow-auto max-h-[50vh] whitespace-pre-wrap break-words">
+            <pre className="text-xs font-mono text-ink-100 overflow-auto max-h-[50vh] whitespace-pre-wrap break-words">
               {typeof body === 'string' ? body : JSON.stringify(body, null, 2)}
             </pre>
           </div>
         </details>
         <details className="border-t border-ink-700">
-          <summary className="px-4 py-2 text-xs text-ink-400 cursor-pointer hover:text-slate-900">Response headers</summary>
+          <summary className="px-4 py-2 text-xs text-ink-400 cursor-pointer hover:text-ink-100">Response headers</summary>
           <pre className="px-4 py-2 text-[11px] font-mono text-ink-400 overflow-auto">
             {Object.entries(headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}
           </pre>
@@ -101,7 +101,7 @@ function CopyCurl({ request }) {
     } catch {}
   }
   return (
-    <button onClick={copy} className="text-[11px] text-ink-400 hover:text-slate-900 px-1.5 py-0.5 rounded">
+    <button onClick={copy} className="text-[11px] text-ink-400 hover:text-ink-100 px-1.5 py-0.5 rounded">
       {copied ? 'copied' : 'copy as cURL'}
     </button>
   )

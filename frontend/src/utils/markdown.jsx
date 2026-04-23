@@ -104,9 +104,9 @@ function CodeBlock({ lang, code }) {
     <div className="relative group">
       <div className="flex items-center justify-between bg-ink-800 border border-ink-700 border-b-0 rounded-t-md px-3 py-1 text-[11px] text-ink-400">
         <span>{lang || 'code'}</span>
-        <button className="hover:text-slate-900 transition" onClick={copy}>{copied ? 'copied' : 'copy'}</button>
+        <button className="hover:text-ink-100 transition" onClick={copy}>{copied ? 'copied' : 'copy'}</button>
       </div>
-      <pre className="bg-white border border-ink-700 rounded-b-md p-3 overflow-auto text-xs font-mono text-slate-900 whitespace-pre-wrap break-words">
+      <pre className="bg-white border border-ink-700 rounded-b-md p-3 overflow-auto text-xs font-mono text-ink-100 whitespace-pre-wrap break-words">
         {code}
       </pre>
     </div>

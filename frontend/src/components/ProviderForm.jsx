@@ -104,7 +104,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="card w-full max-w-3xl h-full sm:h-auto sm:max-h-[92vh] overflow-y-auto rounded-none sm:rounded-lg">
+      <div className="card w-full max-w-3xl h-full sm:h-auto sm:max-h-[92vh] overflow-y-auto rounded-none sm:rounded-lg sm:shadow-panel-lg">
         <div className="p-4 sm:p-5 border-b border-ink-700 flex items-center justify-between sticky top-0 bg-ink-900 z-10">
           <div>
             <div className="font-semibold">{editing ? `Edit ${provider.name}` : 'Add new provider'}</div>
@@ -118,7 +118,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
         <div className="p-4 sm:p-5 space-y-6">
           {/* ---- Basics ---- */}
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-900">Basics</h3>
+            <h3 className="text-sm font-semibold text-ink-100">Basics</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Name</label>
@@ -158,7 +158,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
 
           {/* ---- Auth ---- */}
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-900">Authentication</h3>
+            <h3 className="text-sm font-semibold text-ink-100">Authentication</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="label">Auth type</label>
@@ -197,7 +197,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
               )}
               {form.auth_type === 'hmac' && (
                 <div className="col-span-2 text-xs text-ink-400">
-                  HMAC-SHA256: the secret below signs <code className="font-mono text-slate-800">METHOD\npath\nsha256(body)\ntimestamp</code>. Override header names in Extra headers JSON: <code className="font-mono text-slate-800">hmac_ts_header</code>, <code className="font-mono text-slate-800">hmac_sig_header</code>, <code className="font-mono text-slate-800">hmac_sig_prefix</code>.
+                  HMAC-SHA256: the secret below signs <code className="font-mono text-ink-200">METHOD\npath\nsha256(body)\ntimestamp</code>. Override header names in Extra headers JSON: <code className="font-mono text-ink-200">hmac_ts_header</code>, <code className="font-mono text-ink-200">hmac_sig_header</code>, <code className="font-mono text-ink-200">hmac_sig_prefix</code>.
                 </div>
               )}
               {form.auth_type === 'jwt_hs' && (
@@ -211,7 +211,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                     <input className="input" value={form.auth_prefix} onChange={(e) => set('auth_prefix', e.target.value)} placeholder="Bearer " />
                   </div>
                   <div className="col-span-2 text-xs text-ink-400">
-                    Mints an HS256 JWT with the secret below. Configure claims in Extra headers JSON: <code className="font-mono text-slate-800">jwt_claims</code> (object) and <code className="font-mono text-slate-800">jwt_exp_seconds</code> (int, default 300). <code className="font-mono text-slate-800">iat</code> and <code className="font-mono text-slate-800">exp</code> are set automatically.
+                    Mints an HS256 JWT with the secret below. Configure claims in Extra headers JSON: <code className="font-mono text-ink-200">jwt_claims</code> (object) and <code className="font-mono text-ink-200">jwt_exp_seconds</code> (int, default 300). <code className="font-mono text-ink-200">iat</code> and <code className="font-mono text-ink-200">exp</code> are set automatically.
                   </div>
                 </>
               )}
@@ -264,7 +264,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 placeholder='{"base_path": "v1", "user_id": "42"}'
               />
               <p className="text-[11px] text-ink-400 mt-1">
-                Reference these anywhere with <code className="font-mono text-slate-800">{'{{name}}'}</code> — in paths, headers, query, and request bodies. Substituted before the request is sent.
+                Reference these anywhere with <code className="font-mono text-ink-200">{'{{name}}'}</code> — in paths, headers, query, and request bodies. Substituted before the request is sent.
               </p>
             </div>
           </section>
@@ -273,7 +273,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
           {form.kind === 'http' && (
           <section className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">Endpoints</h3>
+              <h3 className="text-sm font-semibold text-ink-100">Endpoints</h3>
               <button className="btn-secondary text-xs" onClick={addEndpointRow}>+ Add endpoint</button>
             </div>
             <p className="text-[11px] text-ink-400">Each endpoint is a named method + path you can call from the Playground.</p>
@@ -410,7 +410,7 @@ function ModeRadio({ checked, onChange, label, hint }) {
     <button
       type="button"
       onClick={onChange}
-      className={`text-left rounded-md border px-3 py-2 text-xs transition ${checked ? 'border-accent bg-accent/10 text-accent' : 'border-ink-700 bg-white text-slate-800 hover:border-ink-600'}`}
+      className={`text-left rounded-md border px-3 py-2 text-xs transition ${checked ? 'border-accent bg-accent/10 text-accent' : 'border-ink-700 bg-white text-ink-200 hover:border-ink-600'}`}
     >
       <div className="flex items-center gap-2 font-medium">
         <span className={`inline-block w-3 h-3 rounded-full border ${checked ? 'bg-accent border-accent' : 'border-ink-600'}`} />
@@ -427,7 +427,7 @@ function authButtonClass(e) {
   if (mode === 'none') return 'text-ink-400 hover:bg-ink-800'
   if (mode === 'override' && hasKey) return 'text-emerald-700 hover:bg-emerald-500/15'
   if (mode === 'override') return 'text-amber-700 hover:bg-amber-500/15'
-  return 'text-ink-400 hover:bg-ink-800 hover:text-slate-900'
+  return 'text-ink-400 hover:bg-ink-800 hover:text-ink-100'
 }
 function authTooltip(e) {
   const mode = e.auth_mode || 'inherit'
@@ -496,7 +496,7 @@ function ModelListEditor({ models, defaultModel, onChange }) {
               <button
                 type="button"
                 onClick={() => m.trim() && onChange(list.map((x) => x.trim()).filter(Boolean), m.trim())}
-                className={`text-xs px-2 py-1 rounded border ${isDefault ? 'bg-accent/15 text-accent border-accent/40' : 'border-ink-700 text-ink-400 hover:text-slate-900'}`}
+                className={`text-xs px-2 py-1 rounded border ${isDefault ? 'bg-accent/15 text-accent border-accent/40' : 'border-ink-700 text-ink-400 hover:text-ink-100'}`}
                 title={isDefault ? 'Default' : 'Set as default'}
                 disabled={!m.trim()}
               >

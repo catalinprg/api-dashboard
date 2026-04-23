@@ -84,7 +84,7 @@ export default function AdminPanel({ providers, reload }) {
                   </div>
                   <div className="text-xs text-ink-400 font-mono mt-1 truncate">{p.base_url || '—'}</div>
                   {p.default_model && (
-                    <div className="text-xs text-ink-400 mt-1">default model: <span className="font-mono text-slate-800">{p.default_model}</span></div>
+                    <div className="text-xs text-ink-400 mt-1">default model: <span className="font-mono text-ink-200">{p.default_model}</span></div>
                   )}
                   {p.notes && <div className="text-xs text-ink-400 mt-2">{p.notes}</div>}
                   {pings[p.id] && (

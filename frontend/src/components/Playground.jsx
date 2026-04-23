@@ -32,7 +32,7 @@ function TabBtn({ active, onClick, children }) {
     <button
       onClick={onClick}
       className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${
-        active ? 'bg-accent text-white' : 'text-ink-400 hover:text-slate-900'
+        active ? 'bg-accent text-white' : 'text-ink-400 hover:text-ink-100'
       }`}
     >
       {children}
