@@ -15,6 +15,10 @@ const BLANK = {
   models: [],
   extra_headers: '{}',
   variables: '{}',
+  oauth_client_id: '',
+  oauth_token_url: '',
+  oauth_scope: '',
+  oauth_auth_style: 'body',
   enabled: true,
   notes: '',
   api_key: '',
@@ -128,6 +132,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 <label className="label">Kind</label>
                 <select className="select" value={form.kind} onChange={(e) => set('kind', e.target.value)}>
                   <option value="http">HTTP / REST</option>
+                  <option value="graphql">GraphQL</option>
                   <option value="llm">LLM (chat completions)</option>
                 </select>
               </div>
@@ -164,6 +169,8 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 <label className="label">Auth type</label>
                 <select className="select" value={form.auth_type} onChange={(e) => set('auth_type', e.target.value)}>
                   <option value="bearer">Bearer token</option>
+                  <option value="basic">Basic (username:password)</option>
+                  <option value="oauth2_cc">OAuth 2.0 (client credentials)</option>
                   <option value="header">Custom header</option>
                   <option value="query">Query param</option>
                   <option value="hmac">HMAC-SHA256 (signed request)</option>
@@ -194,6 +201,37 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                   <label className="label">Query param name</label>
                   <input className="input" value={form.auth_query_param} onChange={(e) => set('auth_query_param', e.target.value)} placeholder="api_key" />
                 </div>
+              )}
+              {form.auth_type === 'basic' && (
+                <div className="col-span-2 text-xs text-ink-400">
+                  Enter the credentials below as <code className="font-mono text-ink-200">username:password</code>. Sent as <code className="font-mono text-ink-200">Authorization: Basic base64(user:pass)</code>.
+                </div>
+              )}
+              {form.auth_type === 'oauth2_cc' && (
+                <>
+                  <div className="col-span-2">
+                    <label className="label">Token URL</label>
+                    <input className="input" value={form.oauth_token_url} onChange={(e) => set('oauth_token_url', e.target.value)} placeholder="https://auth.example.com/oauth/token" />
+                  </div>
+                  <div>
+                    <label className="label">Client ID</label>
+                    <input className="input font-mono text-xs" value={form.oauth_client_id} onChange={(e) => set('oauth_client_id', e.target.value)} placeholder="your-client-id" />
+                  </div>
+                  <div>
+                    <label className="label">Scope (optional)</label>
+                    <input className="input" value={form.oauth_scope} onChange={(e) => set('oauth_scope', e.target.value)} placeholder="read write" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="label">Auth style</label>
+                    <select className="select" value={form.oauth_auth_style} onChange={(e) => set('oauth_auth_style', e.target.value)}>
+                      <option value="body">Credentials in request body (most servers)</option>
+                      <option value="basic">HTTP Basic header (RFC-strict)</option>
+                    </select>
+                  </div>
+                  <div className="col-span-2 text-xs text-ink-400">
+                    Client secret goes in the key field below. Backend fetches + caches an access token, refreshes 30 s before expiry, and sends it as <code className="font-mono text-ink-200">Authorization: Bearer &lt;token&gt;</code>.
+                  </div>
+                </>
               )}
               {form.auth_type === 'hmac' && (
                 <div className="col-span-2 text-xs text-ink-400">

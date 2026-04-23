@@ -34,6 +34,7 @@ export const api = {
   deleteEndpoint: (id) => request(`/api/endpoints/${id}`, { method: 'DELETE' }),
   invokeLLM: (data) => request('/api/invoke/llm', { method: 'POST', body: data }),
   invokeHTTP: (data) => request('/api/invoke/http', { method: 'POST', body: data }),
+  invokeGraphQL: (data) => request('/api/invoke/graphql', { method: 'POST', body: data }),
   listHistory: (limit = 200, q = '') => request(`/api/history?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
   deleteHistory: (id) => request(`/api/history/${id}`, { method: 'DELETE' }),
   clearHistory: () => request('/api/history', { method: 'DELETE' }),
@@ -56,6 +57,20 @@ export const api = {
   exportConfig: (includeKeys = true) => request(`/api/config/export?include_keys=${includeKeys ? 'true' : 'false'}`),
   importConfig: (data) => request('/api/config/import', { method: 'POST', body: data }),
   importSpec: (data) => request('/api/config/import-spec', { method: 'POST', body: data }),
+  // Scheduled jobs
+  listScheduledJobs: () => request('/api/scheduled-jobs'),
+  createScheduledJob: (data) => request('/api/scheduled-jobs', { method: 'POST', body: data }),
+  updateScheduledJob: (id, data) => request(`/api/scheduled-jobs/${id}`, { method: 'PATCH', body: data }),
+  deleteScheduledJob: (id) => request(`/api/scheduled-jobs/${id}`, { method: 'DELETE' }),
+  runScheduledJob: (id) => request(`/api/scheduled-jobs/${id}/run`, { method: 'POST' }),
+  // Webhooks
+  listWebhooks: () => request('/api/webhooks'),
+  createWebhook: (data) => request('/api/webhooks', { method: 'POST', body: data }),
+  updateWebhook: (id, data) => request(`/api/webhooks/${id}`, { method: 'PATCH', body: data }),
+  deleteWebhook: (id) => request(`/api/webhooks/${id}`, { method: 'DELETE' }),
+  listWebhookEvents: (id, limit = 100) => request(`/api/webhooks/${id}/events?limit=${limit}`),
+  clearWebhookEvents: (id) => request(`/api/webhooks/${id}/events`, { method: 'DELETE' }),
+  deleteWebhookEvent: (id) => request(`/api/webhook-events/${id}`, { method: 'DELETE' }),
   // Auth
   authStatus: () => request('/api/auth/status'),
   authMe: () => request('/api/auth/me'),

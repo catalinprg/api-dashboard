@@ -16,7 +16,7 @@ import auth as auth_module
 import models
 import schemas
 from crypto import encrypt, decrypt
-from database import Base, engine, get_db
+from database import Base, engine, get_db, SessionLocal
 
 Base.metadata.create_all(bind=engine)
 
@@ -31,6 +31,14 @@ def _migrate_schema() -> None:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN models TEXT DEFAULT '[]'"))
             if "variables" not in cols:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN variables TEXT DEFAULT '{}'"))
+            if "oauth_client_id" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_client_id TEXT DEFAULT ''"))
+            if "oauth_token_url" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_token_url TEXT DEFAULT ''"))
+            if "oauth_scope" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_scope TEXT DEFAULT ''"))
+            if "oauth_auth_style" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_auth_style TEXT DEFAULT 'body'"))
     if "chat_sessions" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("chat_sessions")}
         with engine.begin() as conn:
@@ -242,6 +250,10 @@ def _provider_to_out(p: models.Provider) -> dict:
         "models": _parse_models(p.models),
         "extra_headers": p.extra_headers or "{}",
         "variables": getattr(p, "variables", None) or "{}",
+        "oauth_client_id": getattr(p, "oauth_client_id", "") or "",
+        "oauth_token_url": getattr(p, "oauth_token_url", "") or "",
+        "oauth_scope": getattr(p, "oauth_scope", "") or "",
+        "oauth_auth_style": getattr(p, "oauth_auth_style", "body") or "body",
         "enabled": p.enabled,
         "notes": p.notes or "",
         "has_api_key": bool(p.api_key_encrypted),
@@ -289,6 +301,10 @@ def create_provider(payload: schemas.ProviderCreate, db: Session = Depends(get_d
         models=json.dumps([m.strip() for m in (payload.models or []) if m.strip()]),
         extra_headers=payload.extra_headers or "{}",
         variables=payload.variables or "{}",
+        oauth_client_id=payload.oauth_client_id,
+        oauth_token_url=payload.oauth_token_url,
+        oauth_scope=payload.oauth_scope,
+        oauth_auth_style=payload.oauth_auth_style or "body",
         enabled=payload.enabled,
         notes=payload.notes,
         api_key_encrypted=encrypt(payload.api_key.strip()) if payload.api_key else "",
@@ -632,6 +648,13 @@ def _build_auth(
         headers[name] = f"{prefix} {key}" if prefix else key
     elif provider.auth_type == "query":
         params[provider.auth_query_param or "api_key"] = key
+    elif provider.auth_type == "basic":
+        import base64 as _b64
+        # key is stored as "user:pass"
+        headers["Authorization"] = "Basic " + _b64.b64encode(key.encode()).decode()
+    elif provider.auth_type == "oauth2_cc":
+        token = _oauth_cc_token(provider, client_secret=key)
+        headers["Authorization"] = f"Bearer {token}"
     elif provider.auth_type == "hmac":
         _apply_hmac(provider, headers, key, method=method, url=url, body=body_bytes)
     elif provider.auth_type == "jwt_hs":
@@ -688,6 +711,66 @@ def _apply_jwt_hs(provider, headers, secret):
     prefix = (provider.auth_prefix or "Bearer").strip()
     name = provider.auth_header_name or "Authorization"
     headers[name] = f"{prefix} {token}" if prefix else token
+
+
+# In-memory OAuth 2.0 client-credentials token cache, keyed by provider.id.
+# Value: {"access_token": str, "expires_at": float epoch seconds}.
+# Restart drops the cache; tokens refetch on next request — acceptable tradeoff.
+_oauth_cc_cache: Dict[int, Dict[str, Any]] = {}
+
+
+def _oauth_cc_token(provider, *, client_secret: str) -> str:
+    """Fetch (and cache) an OAuth 2.0 client-credentials access token.
+
+    Refreshes 30s before expiry to avoid edge-of-expiry 401s.
+    Raises HTTPException(502) if the token endpoint returns anything unusable.
+    """
+    import time as _time
+    now = _time.time()
+    cached = _oauth_cc_cache.get(provider.id)
+    if cached and cached["expires_at"] - 30 > now:
+        return cached["access_token"]
+
+    token_url = (provider.oauth_token_url or "").strip()
+    if not token_url:
+        raise HTTPException(400, "OAuth provider missing token URL")
+    client_id = (provider.oauth_client_id or "").strip()
+    if not client_id:
+        raise HTTPException(400, "OAuth provider missing client_id")
+
+    data = {"grant_type": "client_credentials"}
+    if provider.oauth_scope:
+        data["scope"] = provider.oauth_scope
+    auth = None
+    if (provider.oauth_auth_style or "body") == "basic":
+        auth = (client_id, client_secret)
+    else:
+        data["client_id"] = client_id
+        data["client_secret"] = client_secret
+
+    try:
+        with httpx.Client(timeout=15.0) as cli:
+            resp = cli.post(token_url, data=data, auth=auth, headers={"Accept": "application/json"})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"OAuth token fetch failed: {e}")
+    if resp.status_code >= 400:
+        raise HTTPException(502, f"OAuth token endpoint returned {resp.status_code}: {resp.text[:300]}")
+    try:
+        payload = resp.json()
+    except Exception:
+        raise HTTPException(502, "OAuth token endpoint returned non-JSON response")
+    token = payload.get("access_token")
+    if not token:
+        raise HTTPException(502, f"OAuth token response missing access_token: {payload}")
+    try:
+        expires_in = int(payload.get("expires_in") or 3600)
+    except (TypeError, ValueError):
+        expires_in = 3600
+    _oauth_cc_cache[provider.id] = {
+        "access_token": token,
+        "expires_at": now + max(60, expires_in),
+    }
+    return token
 
 
 def _log_history(
@@ -998,6 +1081,78 @@ def invoke_http(payload: schemas.HTTPInvokeRequest, db: Session = Depends(get_db
     out.request = echo
     _log_history(
         db, kind="http", provider=provider, label=http_label,
+        request_dict=echo.model_dump(), response=out,
+    )
+    return out
+
+
+@app.post("/api/invoke/graphql", response_model=schemas.InvokeResponse)
+def invoke_graphql(payload: schemas.GraphQLInvokeRequest, db: Session = Depends(get_db)):
+    provider = db.get(models.Provider, payload.provider_id)
+    if not provider or not provider.enabled:
+        raise HTTPException(400, "Provider not found or disabled")
+    if provider.kind != "graphql":
+        raise HTTPException(400, f"Provider '{provider.name}' is not a GraphQL provider")
+
+    vars = _parse_variables(getattr(provider, "variables", None))
+    url = _subst_str((provider.base_url or "").strip(), vars)
+    if not url:
+        raise HTTPException(400, "Provider has no base URL configured")
+
+    body_obj: Dict[str, Any] = {"query": payload.query}
+    if payload.variables:
+        body_obj["variables"] = payload.variables
+    if payload.operation_name:
+        body_obj["operationName"] = payload.operation_name
+
+    headers: Dict[str, str] = {"Content-Type": "application/json", "Accept": "application/json"}
+    try:
+        extra = json.loads(provider.extra_headers or "{}")
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if k.startswith("hmac_") or k.startswith("jwt_"):
+                    continue
+                headers.setdefault(k, str(v))
+    except Exception:
+        pass
+    headers = {k: _subst_str(str(v), vars) for k, v in headers.items()}
+
+    body_bytes = json.dumps(body_obj).encode()
+    _build_auth(provider, headers, {}, method="POST", url=url, body_bytes=body_bytes)
+
+    echo = schemas.RequestEcho(
+        method="POST", url=url,
+        headers=_mask_headers(headers), query={},
+        body=body_obj,
+    )
+
+    # Label the history row with the operation name or the first line of the query
+    op = payload.operation_name or (payload.query.strip().split("\n", 1)[0][:80] if payload.query else "")
+    label = f"{provider.name} · {op}" if op else provider.name
+
+    start = time.time()
+    try:
+        with httpx.Client(timeout=60.0, follow_redirects=True) as cli:
+            r = cli.post(url, headers=headers, json=body_obj)
+    except httpx.HTTPError as exc:
+        err_out = schemas.InvokeResponse(
+            ok=False, status_code=0, latency_ms=int((time.time() - start) * 1000),
+            headers={}, body=None, error=str(exc), request=echo,
+        )
+        _log_history(
+            db, kind="graphql", provider=provider, label=label,
+            request_dict=echo.model_dump(), response=err_out,
+        )
+        return err_out
+    latency = int((time.time() - start) * 1000)
+    out = _parse_response(r)
+    out.latency_ms = latency
+    out.request = echo
+    # GraphQL 200 with { "errors": [...] } is still a functional error — surface that.
+    if out.ok and isinstance(out.body, dict) and out.body.get("errors"):
+        out.error = "; ".join(str(e.get("message", e)) for e in out.body["errors"][:3])
+    _log_history(
+        db, kind="graphql", provider=provider, label=label,
         request_dict=echo.model_dump(), response=out,
     )
     return out
@@ -1545,3 +1700,482 @@ def import_config(payload: Dict[str, Any], db: Session = Depends(get_db)):
         created += 1
     db.commit()
     return {"ok": True, "created": created, "skipped": skipped}
+
+
+# ---------- Webhook receiver ----------
+#
+# Inbound HTTP landing zone — external services POST to /hook/<slug> and we
+# record the request so the user can inspect it. Management APIs live under
+# /api/webhooks. The /hook/* path is deliberately outside /api/ so the
+# authentication middleware doesn't block inbound webhooks.
+
+_WEBHOOK_MAX_BODY_BYTES = 64 * 1024  # truncate anything larger — webhooks are usually small
+_WEBHOOK_MAX_EVENTS_PER_HOOK = 500   # hard cap so an abusive sender can't fill the DB
+
+
+def _webhook_to_out(w: models.Webhook) -> dict:
+    evs = w.events or []
+    last = evs[0].received_at if evs else None
+    return {
+        "id": w.id,
+        "slug": w.slug,
+        "name": w.name or "",
+        "notes": w.notes or "",
+        "enabled": bool(w.enabled),
+        "created_at": w.created_at.isoformat() if w.created_at else "",
+        "event_count": len(evs),
+        "last_event_at": last.isoformat() if last else None,
+    }
+
+
+def _webhook_event_to_out(e: models.WebhookEvent) -> dict:
+    try:
+        headers = json.loads(e.headers_json or "{}")
+    except Exception:
+        headers = {}
+    return {
+        "id": e.id,
+        "webhook_id": e.webhook_id,
+        "method": e.method or "",
+        "path": e.path or "",
+        "query_string": e.query_string or "",
+        "headers": headers if isinstance(headers, dict) else {},
+        "body": e.body_text or "",
+        "content_type": e.content_type or "",
+        "source_ip": e.source_ip or "",
+        "received_at": e.received_at.isoformat() if e.received_at else "",
+    }
+
+
+@app.get("/api/webhooks", response_model=List[schemas.WebhookOut])
+def list_webhooks(db: Session = Depends(get_db)):
+    return [_webhook_to_out(w) for w in db.query(models.Webhook).order_by(models.Webhook.created_at.desc()).all()]
+
+
+@app.post("/api/webhooks", response_model=schemas.WebhookOut)
+def create_webhook(payload: schemas.WebhookCreate, db: Session = Depends(get_db)):
+    # Generate a URL-safe slug; retry on the astronomically unlikely collision.
+    for _ in range(5):
+        slug = secrets.token_urlsafe(9).replace("_", "-").replace("-", "")[:12].lower() or secrets.token_hex(6)
+        if not db.query(models.Webhook).filter(models.Webhook.slug == slug).first():
+            break
+    else:
+        raise HTTPException(500, "Could not allocate a unique webhook slug")
+    w = models.Webhook(slug=slug, name=payload.name or "", notes=payload.notes or "", enabled=True)
+    db.add(w)
+    db.commit()
+    db.refresh(w)
+    return _webhook_to_out(w)
+
+
+@app.patch("/api/webhooks/{webhook_id}", response_model=schemas.WebhookOut)
+def update_webhook(webhook_id: int, payload: schemas.WebhookUpdate, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(w, k, v)
+    db.commit()
+    db.refresh(w)
+    return _webhook_to_out(w)
+
+
+@app.delete("/api/webhooks/{webhook_id}")
+def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    db.delete(w)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/webhooks/{webhook_id}/events", response_model=List[schemas.WebhookEventOut])
+def list_webhook_events(webhook_id: int, limit: int = 100, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    events = (
+        db.query(models.WebhookEvent)
+        .filter(models.WebhookEvent.webhook_id == webhook_id)
+        .order_by(models.WebhookEvent.id.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    return [_webhook_event_to_out(e) for e in events]
+
+
+@app.delete("/api/webhooks/{webhook_id}/events")
+def clear_webhook_events(webhook_id: int, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    db.query(models.WebhookEvent).filter(models.WebhookEvent.webhook_id == webhook_id).delete()
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/webhook-events/{event_id}")
+def delete_webhook_event(event_id: int, db: Session = Depends(get_db)):
+    e = db.get(models.WebhookEvent, event_id)
+    if not e:
+        raise HTTPException(404, "Event not found")
+    db.delete(e)
+    db.commit()
+    return {"ok": True}
+
+
+async def _record_webhook(request: Request, slug: str, extra_path: str, db: Session):
+    w = db.query(models.Webhook).filter(models.Webhook.slug == slug).first()
+    if not w or not w.enabled:
+        raise HTTPException(404, "Unknown webhook")
+
+    raw = await request.body()
+    truncated = False
+    if len(raw) > _WEBHOOK_MAX_BODY_BYTES:
+        raw = raw[:_WEBHOOK_MAX_BODY_BYTES]
+        truncated = True
+    try:
+        body_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        import base64 as _b64
+        body_text = "base64:" + _b64.b64encode(raw).decode()
+    if truncated:
+        body_text += "\n…[truncated]"
+
+    headers = {k: v for k, v in request.headers.items()}
+    src_ip = (request.client.host if request.client else "") or headers.get("x-forwarded-for", "").split(",")[0].strip()
+
+    event = models.WebhookEvent(
+        webhook_id=w.id,
+        method=request.method,
+        path="/" + extra_path if extra_path else "",
+        query_string=request.url.query or "",
+        headers_json=json.dumps(headers),
+        body_text=body_text,
+        content_type=headers.get("content-type", ""),
+        source_ip=src_ip or "",
+    )
+    db.add(event)
+
+    # Trim old events beyond the hard cap to keep the table from growing unboundedly.
+    count = (
+        db.query(models.WebhookEvent)
+        .filter(models.WebhookEvent.webhook_id == w.id)
+        .count()
+    )
+    if count >= _WEBHOOK_MAX_EVENTS_PER_HOOK:
+        overflow = count - _WEBHOOK_MAX_EVENTS_PER_HOOK + 1
+        old_ids = (
+            db.query(models.WebhookEvent.id)
+            .filter(models.WebhookEvent.webhook_id == w.id)
+            .order_by(models.WebhookEvent.id.asc())
+            .limit(overflow)
+            .all()
+        )
+        if old_ids:
+            db.query(models.WebhookEvent).filter(
+                models.WebhookEvent.id.in_([r[0] for r in old_ids])
+            ).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "webhook": w.slug}
+
+
+@app.api_route("/hook/{slug}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
+async def webhook_receive_root(slug: str, request: Request, db: Session = Depends(get_db)):
+    return await _record_webhook(request, slug, "", db)
+
+
+@app.api_route("/hook/{slug}/{extra:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
+async def webhook_receive_subpath(slug: str, extra: str, request: Request, db: Session = Depends(get_db)):
+    return await _record_webhook(request, slug, extra, db)
+
+
+# ---------- Scheduled requests ----------
+#
+# APScheduler BackgroundScheduler runs alongside the FastAPI app. Jobs are
+# persisted in the scheduled_jobs table; on startup we load + register all
+# enabled jobs. Create/update/delete re-syncs the scheduler.
+#
+# Set SCHEDULER_DISABLED=1 to skip background execution (tests use the
+# synchronous /run endpoint instead).
+
+from datetime import datetime as _dt
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+
+_scheduler: Optional[BackgroundScheduler] = None
+
+
+def _scheduler_enabled() -> bool:
+    return os.environ.get("SCHEDULER_DISABLED", "").lower() not in {"1", "true", "yes"}
+
+
+def _get_scheduler() -> Optional[BackgroundScheduler]:
+    global _scheduler
+    if not _scheduler_enabled():
+        return None
+    if _scheduler is None:
+        _scheduler = BackgroundScheduler(timezone="UTC")
+        _scheduler.start()
+    return _scheduler
+
+
+def _parse_cron(expr: str) -> CronTrigger:
+    """Accept a standard 5-field cron expression: minute hour dom month dow."""
+    parts = (expr or "").strip().split()
+    if len(parts) != 5:
+        raise HTTPException(400, "Cron expression must have 5 fields: minute hour day-of-month month day-of-week")
+    minute, hour, dom, month, dow = parts
+    return CronTrigger(minute=minute, hour=hour, day=dom, month=month, day_of_week=dow, timezone="UTC")
+
+
+def _build_trigger(job: models.ScheduledJob):
+    if (job.trigger_type or "interval") == "cron":
+        return _parse_cron(job.cron_expr or "")
+    seconds = int(job.interval_seconds or 0)
+    if seconds < 10:
+        raise HTTPException(400, "Interval must be ≥ 10 seconds")
+    return IntervalTrigger(seconds=seconds)
+
+
+def _validate_trigger(job: models.ScheduledJob) -> None:
+    """Fail fast on bad cron/interval config — runs regardless of scheduler state."""
+    _build_trigger(job)
+
+
+def _schedule_one(job: models.ScheduledJob) -> None:
+    sched = _get_scheduler()
+    if sched is None:
+        return
+    sched.add_job(
+        _run_scheduled_job,
+        args=[job.id],
+        trigger=_build_trigger(job),
+        id=f"job-{job.id}",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
+
+
+def _unschedule_one(job_id: int) -> None:
+    sched = _get_scheduler()
+    if sched is None:
+        return
+    try:
+        sched.remove_job(f"job-{job_id}")
+    except Exception:
+        pass
+
+
+def _execute_http_job(db: Session, job: models.ScheduledJob) -> dict:
+    """Build an HTTPInvokeRequest from the job and run it. Returns a summary dict."""
+    headers = {}
+    query = {}
+    body = None
+    try:
+        headers = json.loads(job.headers_json or "{}") or {}
+    except Exception:
+        pass
+    try:
+        query = json.loads(job.query_json or "{}") or {}
+    except Exception:
+        pass
+    try:
+        body = json.loads(job.body_json) if job.body_json else None
+    except Exception:
+        body = job.body_json
+    payload = schemas.HTTPInvokeRequest(
+        provider_id=job.provider_id,
+        endpoint_id=job.endpoint_id,
+        method=job.method or None,
+        url=job.url or None,
+        path=job.path or None,
+        headers={str(k): str(v) for k, v in headers.items()} if isinstance(headers, dict) else {},
+        query={str(k): str(v) for k, v in query.items()} if isinstance(query, dict) else {},
+        body=body,
+        body_type=job.body_type or "json",
+    )
+    # Re-enter the existing invoke handler so all auth / substitution / history
+    # behavior stays in one place.
+    result = invoke_http(payload, db)
+    return {
+        "ok": bool(result.ok),
+        "status_code": int(result.status_code or 0),
+        "latency_ms": int(result.latency_ms or 0),
+        "error": result.error or "",
+    }
+
+
+def _run_scheduled_job(job_id: int) -> None:
+    """Called by APScheduler on a worker thread."""
+    db = SessionLocal()
+    try:
+        job = db.get(models.ScheduledJob, job_id)
+        if not job or not job.enabled:
+            return
+        try:
+            summary = _execute_http_job(db, job)
+        except Exception as e:
+            summary = {"ok": False, "status_code": 0, "latency_ms": 0, "error": str(e)[:500]}
+        job.last_run_at = _dt.utcnow()
+        job.last_ok = summary["ok"]
+        job.last_status_code = summary["status_code"]
+        job.last_latency_ms = summary["latency_ms"]
+        job.last_error = summary["error"] or ""
+        # Best-effort next_run_at — APScheduler knows the canonical next fire time.
+        sched = _get_scheduler()
+        if sched is not None:
+            apscheduler_job = sched.get_job(f"job-{job.id}")
+            if apscheduler_job and apscheduler_job.next_run_time:
+                job.next_run_at = apscheduler_job.next_run_time.replace(tzinfo=None)
+        db.commit()
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def _load_scheduled_jobs():
+    if not _scheduler_enabled():
+        return
+    db = SessionLocal()
+    try:
+        jobs = db.query(models.ScheduledJob).filter(models.ScheduledJob.enabled == True).all()  # noqa: E712
+        for j in jobs:
+            try:
+                _schedule_one(j)
+            except Exception:
+                # One bad job shouldn't take down startup.
+                pass
+    finally:
+        db.close()
+
+
+@app.on_event("shutdown")
+def _stop_scheduler():
+    global _scheduler
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        _scheduler = None
+
+
+def _sched_job_to_out(j: models.ScheduledJob) -> dict:
+    def _parse(raw, default):
+        if not raw:
+            return default
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, type(default)) else default
+        except Exception:
+            return default
+    body_val: Any = None
+    if j.body_json:
+        try:
+            body_val = json.loads(j.body_json)
+        except Exception:
+            body_val = j.body_json
+    return {
+        "id": j.id,
+        "name": j.name or "",
+        "enabled": bool(j.enabled),
+        "trigger_type": j.trigger_type or "interval",
+        "interval_seconds": j.interval_seconds,
+        "cron_expr": j.cron_expr or "",
+        "provider_id": j.provider_id,
+        "endpoint_id": j.endpoint_id,
+        "method": j.method or "",
+        "url": j.url or "",
+        "path": j.path or "",
+        "headers": _parse(j.headers_json, {}),
+        "query": _parse(j.query_json, {}),
+        "body": body_val,
+        "body_type": j.body_type or "json",
+        "last_run_at": j.last_run_at.isoformat() if j.last_run_at else None,
+        "last_ok": j.last_ok,
+        "last_status_code": j.last_status_code,
+        "last_latency_ms": j.last_latency_ms,
+        "last_error": j.last_error or "",
+        "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+        "created_at": j.created_at.isoformat() if j.created_at else "",
+        "updated_at": j.updated_at.isoformat() if j.updated_at else "",
+    }
+
+
+def _apply_job_payload(j: models.ScheduledJob, data: Dict[str, Any]) -> None:
+    for k in ("name", "enabled", "trigger_type", "interval_seconds", "cron_expr",
+              "provider_id", "endpoint_id", "method", "url", "path", "body_type"):
+        if k in data:
+            setattr(j, k, data[k])
+    if "headers" in data:
+        j.headers_json = json.dumps(data["headers"] or {})
+    if "query" in data:
+        j.query_json = json.dumps(data["query"] or {})
+    if "body" in data:
+        j.body_json = json.dumps(data["body"]) if data["body"] is not None else ""
+
+
+@app.get("/api/scheduled-jobs", response_model=List[schemas.ScheduledJobOut])
+def list_scheduled_jobs(db: Session = Depends(get_db)):
+    return [_sched_job_to_out(j) for j in db.query(models.ScheduledJob).order_by(models.ScheduledJob.created_at.desc()).all()]
+
+
+@app.post("/api/scheduled-jobs", response_model=schemas.ScheduledJobOut)
+def create_scheduled_job(payload: schemas.ScheduledJobCreate, db: Session = Depends(get_db)):
+    j = models.ScheduledJob()
+    _apply_job_payload(j, payload.model_dump())
+    _validate_trigger(j)  # 400s on bad cron / interval before we hit the DB
+    db.add(j)
+    db.commit()
+    db.refresh(j)
+    if j.enabled:
+        _schedule_one(j)
+    return _sched_job_to_out(j)
+
+
+@app.patch("/api/scheduled-jobs/{job_id}", response_model=schemas.ScheduledJobOut)
+def update_scheduled_job(job_id: int, payload: schemas.ScheduledJobUpdate, db: Session = Depends(get_db)):
+    j = db.get(models.ScheduledJob, job_id)
+    if not j:
+        raise HTTPException(404, "Job not found")
+    _apply_job_payload(j, payload.model_dump(exclude_unset=True))
+    _validate_trigger(j)
+    db.commit()
+    db.refresh(j)
+    _unschedule_one(j.id)
+    if j.enabled:
+        _schedule_one(j)
+    return _sched_job_to_out(j)
+
+
+@app.delete("/api/scheduled-jobs/{job_id}")
+def delete_scheduled_job(job_id: int, db: Session = Depends(get_db)):
+    j = db.get(models.ScheduledJob, job_id)
+    if not j:
+        raise HTTPException(404, "Job not found")
+    _unschedule_one(j.id)
+    db.delete(j)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/scheduled-jobs/{job_id}/run")
+def run_scheduled_job_now(job_id: int, db: Session = Depends(get_db)):
+    j = db.get(models.ScheduledJob, job_id)
+    if not j:
+        raise HTTPException(404, "Job not found")
+    try:
+        summary = _execute_http_job(db, j)
+    except Exception as e:
+        summary = {"ok": False, "status_code": 0, "latency_ms": 0, "error": str(e)[:500]}
+    j.last_run_at = _dt.utcnow()
+    j.last_ok = summary["ok"]
+    j.last_status_code = summary["status_code"]
+    j.last_latency_ms = summary["latency_ms"]
+    j.last_error = summary["error"] or ""
+    db.commit()
+    db.refresh(j)
+    return {"ok": summary["ok"], "status_code": summary["status_code"], "latency_ms": summary["latency_ms"], "error": summary["error"], "job": _sched_job_to_out(j)}

@@ -36,6 +36,11 @@ class ProviderBase(BaseModel):
     models: List[str] = Field(default_factory=list)
     extra_headers: str = "{}"
     variables: str = "{}"  # JSON string of {var_name: value}
+    # OAuth 2.0 client-credentials (client_secret lives in api_key)
+    oauth_client_id: str = ""
+    oauth_token_url: str = ""
+    oauth_scope: str = ""
+    oauth_auth_style: str = "body"  # "body" | "basic"
     enabled: bool = True
     notes: str = ""
 
@@ -57,6 +62,10 @@ class ProviderUpdate(BaseModel):
     models: Optional[List[str]] = None
     extra_headers: Optional[str] = None
     variables: Optional[str] = None
+    oauth_client_id: Optional[str] = None
+    oauth_token_url: Optional[str] = None
+    oauth_scope: Optional[str] = None
+    oauth_auth_style: Optional[str] = None
     enabled: Optional[bool] = None
     notes: Optional[str] = None
     api_key: Optional[str] = None  # if provided, re-encrypt; empty string = clear
@@ -136,6 +145,13 @@ class HTTPInvokeRequest(BaseModel):
     body_type: str = "json"  # json | text | form
 
 
+class GraphQLInvokeRequest(BaseModel):
+    provider_id: int
+    query: str
+    variables: Optional[Dict[str, Any]] = None
+    operation_name: Optional[str] = None
+
+
 class RequestEcho(BaseModel):
     method: str
     url: str
@@ -190,6 +206,91 @@ class PresetOut(PresetBase):
     id: int
     created_at: str
     updated_at: str
+
+
+class ScheduledJobBase(BaseModel):
+    name: str = ""
+    enabled: bool = True
+    trigger_type: str = "interval"  # "interval" | "cron"
+    interval_seconds: Optional[int] = None
+    cron_expr: str = ""
+    provider_id: Optional[int] = None
+    endpoint_id: Optional[int] = None
+    method: str = ""
+    url: str = ""
+    path: str = ""
+    headers: Dict[str, str] = Field(default_factory=dict)
+    query: Dict[str, str] = Field(default_factory=dict)
+    body: Optional[Any] = None
+    body_type: str = "json"
+
+
+class ScheduledJobCreate(ScheduledJobBase):
+    pass
+
+
+class ScheduledJobUpdate(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    trigger_type: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    cron_expr: Optional[str] = None
+    provider_id: Optional[int] = None
+    endpoint_id: Optional[int] = None
+    method: Optional[str] = None
+    url: Optional[str] = None
+    path: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None
+    query: Optional[Dict[str, str]] = None
+    body: Optional[Any] = None
+    body_type: Optional[str] = None
+
+
+class ScheduledJobOut(ScheduledJobBase):
+    id: int
+    last_run_at: Optional[str] = None
+    last_ok: Optional[bool] = None
+    last_status_code: Optional[int] = None
+    last_latency_ms: Optional[int] = None
+    last_error: str = ""
+    next_run_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class WebhookCreate(BaseModel):
+    name: str = ""
+    notes: str = ""
+
+
+class WebhookUpdate(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class WebhookOut(BaseModel):
+    id: int
+    slug: str
+    name: str
+    notes: str
+    enabled: bool
+    created_at: str
+    event_count: int = 0
+    last_event_at: Optional[str] = None
+
+
+class WebhookEventOut(BaseModel):
+    id: int
+    webhook_id: int
+    method: str
+    path: str
+    query_string: str
+    headers: Dict[str, str]
+    body: str
+    content_type: str
+    source_ip: str
+    received_at: str
 
 
 class HistoryOut(BaseModel):

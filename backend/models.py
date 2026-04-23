@@ -21,6 +21,11 @@ class Provider(Base):
     models = Column(Text, default="[]")  # JSON list of model ids
     extra_headers = Column(Text, default="{}")  # JSON string
     variables = Column(Text, default="{}")  # JSON dict of {var_name: value} for {{var}} substitution
+    # OAuth 2.0 (client credentials) — client_secret reuses api_key_encrypted
+    oauth_client_id = Column(String, default="")
+    oauth_token_url = Column(String, default="")
+    oauth_scope = Column(String, default="")
+    oauth_auth_style = Column(String, default="body")  # "body" (creds in form) or "basic" (Basic header)
     enabled = Column(Boolean, default=True)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -92,6 +97,73 @@ class RequestPreset(Base):
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ScheduledJob(Base):
+    __tablename__ = "scheduled_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, default="")
+    enabled = Column(Boolean, default=True)
+    # "interval" (every N seconds) or "cron" (5-field expression)
+    trigger_type = Column(String, default="interval")
+    interval_seconds = Column(Integer, nullable=True)
+    cron_expr = Column(String, default="")
+
+    # What to execute — mirrors HTTPInvokeRequest so we can reuse invoke logic.
+    provider_id = Column(Integer, nullable=True)
+    endpoint_id = Column(Integer, nullable=True)
+    method = Column(String, default="")
+    url = Column(String, default="")
+    path = Column(String, default="")
+    headers_json = Column(Text, default="{}")
+    query_json = Column(Text, default="{}")
+    body_json = Column(Text, default="")  # JSON-encoded: string | object | null
+    body_type = Column(String, default="json")
+
+    last_run_at = Column(DateTime, nullable=True)
+    last_ok = Column(Boolean, nullable=True)
+    last_status_code = Column(Integer, nullable=True)
+    last_latency_ms = Column(Integer, nullable=True)
+    last_error = Column(Text, default="")
+    next_run_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False, default="")
+    notes = Column(Text, default="")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    events = relationship(
+        "WebhookEvent",
+        back_populates="webhook",
+        cascade="all, delete-orphan",
+        order_by="WebhookEvent.id.desc()",
+    )
+
+
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    webhook_id = Column(Integer, ForeignKey("webhooks.id"), nullable=False, index=True)
+    method = Column(String, default="POST")
+    path = Column(String, default="")  # any extra path after /hook/<slug>/...
+    query_string = Column(Text, default="")
+    headers_json = Column(Text, default="{}")
+    body_text = Column(Text, default="")
+    content_type = Column(String, default="")
+    source_ip = Column(String, default="")
+    received_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    webhook = relationship("Webhook", back_populates="events")
 
 
 class HistoryEntry(Base):

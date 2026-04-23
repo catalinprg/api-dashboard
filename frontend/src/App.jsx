@@ -4,6 +4,9 @@ import Sidebar from './components/Sidebar.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
 import AIPanel from './components/AIPanel.jsx'
 import HTTPPanel from './components/HTTPPanel.jsx'
+import GraphQLPanel from './components/GraphQLPanel.jsx'
+import WebhookPanel from './components/WebhookPanel.jsx'
+import ScheduledPanel from './components/ScheduledPanel.jsx'
 import HistoryPanel from './components/HistoryPanel.jsx'
 import AuthGate from './components/AuthGate.jsx'
 import { api } from './api.js'
@@ -11,6 +14,9 @@ import { api } from './api.js'
 const VIEW_LABELS = {
   ai: 'AI API',
   http: 'HTTP / REST',
+  graphql: 'GraphQL',
+  webhooks: 'Webhooks',
+  scheduled: 'Scheduled',
   history: 'History',
   admin: 'Admin',
 }
@@ -84,6 +90,12 @@ function Shell({ user }) {
           <HistoryPanel />
         ) : view === 'http' ? (
           <HTTPPanel providers={providers} />
+        ) : view === 'graphql' ? (
+          <GraphQLPanel providers={providers} />
+        ) : view === 'webhooks' ? (
+          <WebhookPanel />
+        ) : view === 'scheduled' ? (
+          <ScheduledPanel />
         ) : (
           <AIPanel providers={providers} />
         )}
