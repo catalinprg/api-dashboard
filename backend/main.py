@@ -632,6 +632,10 @@ def _build_auth(
         headers[name] = f"{prefix} {key}" if prefix else key
     elif provider.auth_type == "query":
         params[provider.auth_query_param or "api_key"] = key
+    elif provider.auth_type == "basic":
+        import base64 as _b64
+        # key is stored as "user:pass"
+        headers["Authorization"] = "Basic " + _b64.b64encode(key.encode()).decode()
     elif provider.auth_type == "hmac":
         _apply_hmac(provider, headers, key, method=method, url=url, body=body_bytes)
     elif provider.auth_type == "jwt_hs":

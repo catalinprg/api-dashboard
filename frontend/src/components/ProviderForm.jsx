@@ -164,6 +164,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 <label className="label">Auth type</label>
                 <select className="select" value={form.auth_type} onChange={(e) => set('auth_type', e.target.value)}>
                   <option value="bearer">Bearer token</option>
+                  <option value="basic">Basic (username:password)</option>
                   <option value="header">Custom header</option>
                   <option value="query">Query param</option>
                   <option value="hmac">HMAC-SHA256 (signed request)</option>
@@ -193,6 +194,11 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 <div>
                   <label className="label">Query param name</label>
                   <input className="input" value={form.auth_query_param} onChange={(e) => set('auth_query_param', e.target.value)} placeholder="api_key" />
+                </div>
+              )}
+              {form.auth_type === 'basic' && (
+                <div className="col-span-2 text-xs text-ink-400">
+                  Enter the credentials below as <code className="font-mono text-ink-200">username:password</code>. Sent as <code className="font-mono text-ink-200">Authorization: Basic base64(user:pass)</code>.
                 </div>
               )}
               {form.auth_type === 'hmac' && (
