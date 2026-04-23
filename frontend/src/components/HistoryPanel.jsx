@@ -30,8 +30,8 @@ export default function HistoryPanel() {
 
   const filtered = useMemo(() => {
     return items.filter((it) => {
-      if (filter === 'llm' && it.kind !== 'llm') return false
       if (filter === 'http' && it.kind !== 'http') return false
+      if (filter === 'graphql' && it.kind !== 'graphql') return false
       if (filter === 'ok' && !it.ok) return false
       if (filter === 'error' && it.ok) return false
       return true
@@ -56,7 +56,7 @@ export default function HistoryPanel() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 md:mb-6">
           <div>
             <h1 className="text-lg md:text-xl font-semibold">History</h1>
-            <p className="text-xs md:text-sm text-ink-400 mt-0.5 md:mt-1">Every request you've sent through the playground.</p>
+            <p className="text-xs md:text-sm text-ink-400 mt-0.5 md:mt-1">Every request you've sent through the dashboard.</p>
           </div>
           <div className="flex gap-2">
             <button className="btn-secondary text-xs flex-1 sm:flex-none" onClick={reload}>Refresh</button>
@@ -74,8 +74,8 @@ export default function HistoryPanel() {
           <div className="flex gap-1 p-1 bg-ink-900 border border-ink-700 rounded-lg overflow-x-auto">
             {[
               ['all', 'All'],
-              ['llm', 'LLM'],
               ['http', 'HTTP'],
+              ['graphql', 'GraphQL'],
               ['ok', 'Success'],
               ['error', 'Errors'],
             ].map(([v, label]) => (
@@ -96,7 +96,7 @@ export default function HistoryPanel() {
           <div className="card p-10 text-center text-ink-400 text-sm">Loading…</div>
         ) : filtered.length === 0 ? (
           <div className="card p-10 text-center text-ink-400 text-sm">
-            {items.length === 0 ? 'No requests yet. Send one from the Playground.' : 'Nothing matches.'}
+            {items.length === 0 ? 'No requests yet. Send one from the HTTP or GraphQL panel.' : 'Nothing matches.'}
           </div>
         ) : (
           <div className="space-y-2">

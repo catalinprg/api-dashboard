@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LayoutGrid, X, Sparkles, Globe, Braces, Webhook, CalendarClock, Clock, Settings, RefreshCw } from 'lucide-react'
+import { LayoutGrid, X, Globe, Braces, Webhook, CalendarClock, Clock, Settings, RefreshCw } from 'lucide-react'
 import { api } from '../api.js'
 
 export default function Sidebar({ view, setView, providerCount, navOpen, onClose, user, onRefresh, refreshing }) {
@@ -16,7 +16,6 @@ export default function Sidebar({ view, setView, providerCount, navOpen, onClose
     }
   }
   const items = [
-    { id: 'ai', label: 'AI API', icon: Sparkles, hint: 'LLM chat & compare' },
     { id: 'http', label: 'HTTP / REST', icon: Globe, hint: 'Call any endpoint' },
     { id: 'graphql', label: 'GraphQL', icon: Braces, hint: 'Query GraphQL APIs' },
     { id: 'webhooks', label: 'Webhooks', icon: Webhook, hint: 'Inbound event capture' },

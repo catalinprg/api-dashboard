@@ -10,15 +10,13 @@ class Provider(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
-    kind = Column(String, nullable=False, default="llm")  # llm | http
+    kind = Column(String, nullable=False, default="http")  # http | graphql
     base_url = Column(String, nullable=False)
-    auth_type = Column(String, nullable=False, default="bearer")  # bearer | header | query | none
+    auth_type = Column(String, nullable=False, default="bearer")  # bearer | basic | oauth2_cc | header | query | hmac | jwt_hs | none
     auth_header_name = Column(String, default="Authorization")
     auth_prefix = Column(String, default="Bearer ")
     auth_query_param = Column(String, default="")
     api_key_encrypted = Column(Text, default="")
-    default_model = Column(String, default="")
-    models = Column(Text, default="[]")  # JSON list of model ids
     extra_headers = Column(Text, default="{}")  # JSON string
     variables = Column(Text, default="{}")  # JSON dict of {var_name: value} for {{var}} substitution
     # OAuth 2.0 (client credentials) — client_secret reuses api_key_encrypted
@@ -47,37 +45,6 @@ class Endpoint(Base):
     auth_mode = Column(String, default="inherit")  # inherit | override | none
 
     provider = relationship("Provider", back_populates="endpoints")
-
-
-class ChatSession(Base):
-    __tablename__ = "chat_sessions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, default="New chat")
-    provider_id = Column(Integer, nullable=True)
-    model = Column(String, default="")
-    system_prompt = Column(Text, default="")
-    temperature = Column(String, default="0.7")
-    max_tokens = Column(Integer, nullable=True)
-    tools_json = Column(Text, default="[]")  # JSON list of OpenAI-format tool schemas
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.id")
-
-
-class ChatMessage(Base):
-    __tablename__ = "chat_messages"
-
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)
-    role = Column(String, nullable=False)  # user | assistant | system | tool
-    content_json = Column(Text, default="")  # JSON-encoded string or content parts array
-    tool_calls_json = Column(Text, default="")  # assistant: JSON list of tool_calls
-    tool_call_id = Column(String, default="")   # tool reply: references the tool_call id
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    session = relationship("ChatSession", back_populates="messages")
 
 
 class RequestPreset(Base):
@@ -170,7 +137,7 @@ class HistoryEntry(Base):
     __tablename__ = "history"
 
     id = Column(Integer, primary_key=True, index=True)
-    kind = Column(String, nullable=False)  # "llm" | "http"
+    kind = Column(String, nullable=False)  # "http" | "graphql"
     provider_id = Column(Integer, nullable=True)
     provider_name = Column(String, default="")
     label = Column(String, default="")  # preview label: model id / endpoint name / method+url

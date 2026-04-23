@@ -11,8 +11,6 @@ const BLANK = {
   auth_header_name: 'Authorization',
   auth_prefix: 'Bearer ',
   auth_query_param: '',
-  default_model: '',
-  models: [],
   extra_headers: '{}',
   variables: '{}',
   oauth_client_id: '',
@@ -26,16 +24,11 @@ const BLANK = {
 
 export default function ProviderForm({ provider, onClose, onSaved }) {
   const editing = !!provider
-  const [form, setForm] = useState(() => {
-    const m = provider?.models || []
-    const backfilled = m.length === 0 && provider?.default_model ? [provider.default_model] : m
-    return {
-      ...BLANK,
-      ...(provider || {}),
-      models: backfilled,
-      api_key: '',
-    }
-  })
+  const [form, setForm] = useState(() => ({
+    ...BLANK,
+    ...(provider || {}),
+    api_key: '',
+  }))
   // Local endpoint edits (create-mode only; edit-mode uses live API calls)
   const [draftEndpoints, setDraftEndpoints] = useState(
     () => (provider?.endpoints || []).map((e) => ({ ...e, _persisted: true }))
@@ -113,7 +106,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
           <div>
             <div className="font-semibold">{editing ? `Edit ${provider.name}` : 'Add new provider'}</div>
             <div className="text-xs text-ink-400 mt-0.5">
-              {editing ? 'Update config, rotate the key, or manage endpoints.' : 'Configure an API you want to call from the playground.'}
+              {editing ? 'Update config, rotate the key, or manage endpoints.' : 'Configure an API you want to call from the dashboard.'}
             </div>
           </div>
           <button className="btn-ghost" onClick={onClose}>✕</button>
@@ -133,7 +126,6 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 <select className="select" value={form.kind} onChange={(e) => set('kind', e.target.value)}>
                   <option value="http">HTTP / REST</option>
                   <option value="graphql">GraphQL</option>
-                  <option value="llm">LLM (chat completions)</option>
                 </select>
               </div>
             </div>
@@ -142,15 +134,6 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
               <input className="input font-mono text-xs" value={form.base_url} onChange={(e) => set('base_url', e.target.value)} placeholder="https://api.example.com" />
               <p className="text-[11px] text-ink-400 mt-1">Endpoint paths below are appended to this.</p>
             </div>
-            {form.kind === 'llm' && (
-              <ModelListEditor
-                models={form.models}
-                defaultModel={form.default_model}
-                onChange={(models, defaultModel) => {
-                  setForm((f) => ({ ...f, models, default_model: defaultModel }))
-                }}
-              />
-            )}
             <div>
               <label className="label">Notes</label>
               <textarea className="textarea text-xs" rows={2} value={form.notes} onChange={(e) => set('notes', e.target.value)} placeholder="Where to get the API key, quirks, etc." />
@@ -314,11 +297,11 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
               <h3 className="text-sm font-semibold text-ink-100">Endpoints</h3>
               <button className="btn-secondary text-xs" onClick={addEndpointRow}>+ Add endpoint</button>
             </div>
-            <p className="text-[11px] text-ink-400">Each endpoint is a named method + path you can call from the Playground.</p>
+            <p className="text-[11px] text-ink-400">Each endpoint is a named method + path you can call from the HTTP panel.</p>
 
             {draftEndpoints.length === 0 && (
               <div className="text-xs text-ink-400 bg-white/50 border border-dashed border-ink-700 rounded-md p-4 text-center">
-                No endpoints yet. Add one so it shows up in the Playground.
+                No endpoints yet. Add one so it shows up in the HTTP panel.
               </div>
             )}
 
@@ -494,57 +477,3 @@ function KeyIcon({ mode, hasKey }) {
   )
 }
 
-function ModelListEditor({ models, defaultModel, onChange }) {
-  const list = models && models.length ? models : ['']
-  const update = (idx, value) => {
-    const next = [...list]
-    next[idx] = value
-    const cleaned = next.filter((m) => m.trim())
-    let newDefault = defaultModel
-    if (!cleaned.includes(newDefault)) newDefault = cleaned[0] || ''
-    onChange(cleaned.length ? cleaned : [], newDefault)
-  }
-  const remove = (idx) => {
-    const next = list.filter((_, i) => i !== idx)
-    const cleaned = next.filter((m) => m.trim())
-    let newDefault = defaultModel
-    if (!cleaned.includes(newDefault)) newDefault = cleaned[0] || ''
-    onChange(cleaned, newDefault)
-  }
-  const add = () => onChange([...list.filter((m) => m.trim()), ''], defaultModel)
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <label className="label !mb-0">Models</label>
-        <button type="button" className="text-xs text-accent hover:underline" onClick={add}>+ Add model</button>
-      </div>
-      <p className="text-[11px] text-ink-400 mb-2">Listed here for quick switching in the Playground. One is the default.</p>
-      <div className="space-y-2">
-        {list.map((m, i) => {
-          const isDefault = defaultModel && defaultModel === m && m.trim()
-          return (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                className="input font-mono text-xs flex-1"
-                value={m}
-                onChange={(e) => update(i, e.target.value)}
-                placeholder="openai/gpt-4o-mini"
-              />
-              <button
-                type="button"
-                onClick={() => m.trim() && onChange(list.map((x) => x.trim()).filter(Boolean), m.trim())}
-                className={`text-xs px-2 py-1 rounded border ${isDefault ? 'bg-accent/15 text-accent border-accent/40' : 'border-ink-700 text-ink-400 hover:text-ink-100'}`}
-                title={isDefault ? 'Default' : 'Set as default'}
-                disabled={!m.trim()}
-              >
-                {isDefault ? '★ default' : 'Set default'}
-              </button>
-              <button type="button" className="btn-ghost text-ink-400 hover:text-red-700" onClick={() => remove(i)}>✕</button>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
