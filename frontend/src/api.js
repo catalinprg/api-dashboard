@@ -57,6 +57,14 @@ export const api = {
   exportConfig: (includeKeys = true) => request(`/api/config/export?include_keys=${includeKeys ? 'true' : 'false'}`),
   importConfig: (data) => request('/api/config/import', { method: 'POST', body: data }),
   importSpec: (data) => request('/api/config/import-spec', { method: 'POST', body: data }),
+  // Webhooks
+  listWebhooks: () => request('/api/webhooks'),
+  createWebhook: (data) => request('/api/webhooks', { method: 'POST', body: data }),
+  updateWebhook: (id, data) => request(`/api/webhooks/${id}`, { method: 'PATCH', body: data }),
+  deleteWebhook: (id) => request(`/api/webhooks/${id}`, { method: 'DELETE' }),
+  listWebhookEvents: (id, limit = 100) => request(`/api/webhooks/${id}/events?limit=${limit}`),
+  clearWebhookEvents: (id) => request(`/api/webhooks/${id}/events`, { method: 'DELETE' }),
+  deleteWebhookEvent: (id) => request(`/api/webhook-events/${id}`, { method: 'DELETE' }),
   // Auth
   authStatus: () => request('/api/auth/status'),
   authMe: () => request('/api/auth/me'),

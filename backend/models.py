@@ -99,6 +99,41 @@ class RequestPreset(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class Webhook(Base):
+    __tablename__ = "webhooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False, default="")
+    notes = Column(Text, default="")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    events = relationship(
+        "WebhookEvent",
+        back_populates="webhook",
+        cascade="all, delete-orphan",
+        order_by="WebhookEvent.id.desc()",
+    )
+
+
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    webhook_id = Column(Integer, ForeignKey("webhooks.id"), nullable=False, index=True)
+    method = Column(String, default="POST")
+    path = Column(String, default="")  # any extra path after /hook/<slug>/...
+    query_string = Column(Text, default="")
+    headers_json = Column(Text, default="{}")
+    body_text = Column(Text, default="")
+    content_type = Column(String, default="")
+    source_ip = Column(String, default="")
+    received_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    webhook = relationship("Webhook", back_populates="events")
+
+
 class HistoryEntry(Base):
     __tablename__ = "history"
 

@@ -5,6 +5,7 @@ import AdminPanel from './components/AdminPanel.jsx'
 import AIPanel from './components/AIPanel.jsx'
 import HTTPPanel from './components/HTTPPanel.jsx'
 import GraphQLPanel from './components/GraphQLPanel.jsx'
+import WebhookPanel from './components/WebhookPanel.jsx'
 import HistoryPanel from './components/HistoryPanel.jsx'
 import AuthGate from './components/AuthGate.jsx'
 import { api } from './api.js'
@@ -13,6 +14,7 @@ const VIEW_LABELS = {
   ai: 'AI API',
   http: 'HTTP / REST',
   graphql: 'GraphQL',
+  webhooks: 'Webhooks',
   history: 'History',
   admin: 'Admin',
 }
@@ -88,6 +90,8 @@ function Shell({ user }) {
           <HTTPPanel providers={providers} />
         ) : view === 'graphql' ? (
           <GraphQLPanel providers={providers} />
+        ) : view === 'webhooks' ? (
+          <WebhookPanel />
         ) : (
           <AIPanel providers={providers} />
         )}

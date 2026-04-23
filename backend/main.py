@@ -1700,3 +1700,192 @@ def import_config(payload: Dict[str, Any], db: Session = Depends(get_db)):
         created += 1
     db.commit()
     return {"ok": True, "created": created, "skipped": skipped}
+
+
+# ---------- Webhook receiver ----------
+#
+# Inbound HTTP landing zone — external services POST to /hook/<slug> and we
+# record the request so the user can inspect it. Management APIs live under
+# /api/webhooks. The /hook/* path is deliberately outside /api/ so the
+# authentication middleware doesn't block inbound webhooks.
+
+_WEBHOOK_MAX_BODY_BYTES = 64 * 1024  # truncate anything larger — webhooks are usually small
+_WEBHOOK_MAX_EVENTS_PER_HOOK = 500   # hard cap so an abusive sender can't fill the DB
+
+
+def _webhook_to_out(w: models.Webhook) -> dict:
+    evs = w.events or []
+    last = evs[0].received_at if evs else None
+    return {
+        "id": w.id,
+        "slug": w.slug,
+        "name": w.name or "",
+        "notes": w.notes or "",
+        "enabled": bool(w.enabled),
+        "created_at": w.created_at.isoformat() if w.created_at else "",
+        "event_count": len(evs),
+        "last_event_at": last.isoformat() if last else None,
+    }
+
+
+def _webhook_event_to_out(e: models.WebhookEvent) -> dict:
+    try:
+        headers = json.loads(e.headers_json or "{}")
+    except Exception:
+        headers = {}
+    return {
+        "id": e.id,
+        "webhook_id": e.webhook_id,
+        "method": e.method or "",
+        "path": e.path or "",
+        "query_string": e.query_string or "",
+        "headers": headers if isinstance(headers, dict) else {},
+        "body": e.body_text or "",
+        "content_type": e.content_type or "",
+        "source_ip": e.source_ip or "",
+        "received_at": e.received_at.isoformat() if e.received_at else "",
+    }
+
+
+@app.get("/api/webhooks", response_model=List[schemas.WebhookOut])
+def list_webhooks(db: Session = Depends(get_db)):
+    return [_webhook_to_out(w) for w in db.query(models.Webhook).order_by(models.Webhook.created_at.desc()).all()]
+
+
+@app.post("/api/webhooks", response_model=schemas.WebhookOut)
+def create_webhook(payload: schemas.WebhookCreate, db: Session = Depends(get_db)):
+    # Generate a URL-safe slug; retry on the astronomically unlikely collision.
+    for _ in range(5):
+        slug = secrets.token_urlsafe(9).replace("_", "-").replace("-", "")[:12].lower() or secrets.token_hex(6)
+        if not db.query(models.Webhook).filter(models.Webhook.slug == slug).first():
+            break
+    else:
+        raise HTTPException(500, "Could not allocate a unique webhook slug")
+    w = models.Webhook(slug=slug, name=payload.name or "", notes=payload.notes or "", enabled=True)
+    db.add(w)
+    db.commit()
+    db.refresh(w)
+    return _webhook_to_out(w)
+
+
+@app.patch("/api/webhooks/{webhook_id}", response_model=schemas.WebhookOut)
+def update_webhook(webhook_id: int, payload: schemas.WebhookUpdate, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(w, k, v)
+    db.commit()
+    db.refresh(w)
+    return _webhook_to_out(w)
+
+
+@app.delete("/api/webhooks/{webhook_id}")
+def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    db.delete(w)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/webhooks/{webhook_id}/events", response_model=List[schemas.WebhookEventOut])
+def list_webhook_events(webhook_id: int, limit: int = 100, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    events = (
+        db.query(models.WebhookEvent)
+        .filter(models.WebhookEvent.webhook_id == webhook_id)
+        .order_by(models.WebhookEvent.id.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    return [_webhook_event_to_out(e) for e in events]
+
+
+@app.delete("/api/webhooks/{webhook_id}/events")
+def clear_webhook_events(webhook_id: int, db: Session = Depends(get_db)):
+    w = db.get(models.Webhook, webhook_id)
+    if not w:
+        raise HTTPException(404, "Webhook not found")
+    db.query(models.WebhookEvent).filter(models.WebhookEvent.webhook_id == webhook_id).delete()
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/webhook-events/{event_id}")
+def delete_webhook_event(event_id: int, db: Session = Depends(get_db)):
+    e = db.get(models.WebhookEvent, event_id)
+    if not e:
+        raise HTTPException(404, "Event not found")
+    db.delete(e)
+    db.commit()
+    return {"ok": True}
+
+
+async def _record_webhook(request: Request, slug: str, extra_path: str, db: Session):
+    w = db.query(models.Webhook).filter(models.Webhook.slug == slug).first()
+    if not w or not w.enabled:
+        raise HTTPException(404, "Unknown webhook")
+
+    raw = await request.body()
+    truncated = False
+    if len(raw) > _WEBHOOK_MAX_BODY_BYTES:
+        raw = raw[:_WEBHOOK_MAX_BODY_BYTES]
+        truncated = True
+    try:
+        body_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        import base64 as _b64
+        body_text = "base64:" + _b64.b64encode(raw).decode()
+    if truncated:
+        body_text += "\n…[truncated]"
+
+    headers = {k: v for k, v in request.headers.items()}
+    src_ip = (request.client.host if request.client else "") or headers.get("x-forwarded-for", "").split(",")[0].strip()
+
+    event = models.WebhookEvent(
+        webhook_id=w.id,
+        method=request.method,
+        path="/" + extra_path if extra_path else "",
+        query_string=request.url.query or "",
+        headers_json=json.dumps(headers),
+        body_text=body_text,
+        content_type=headers.get("content-type", ""),
+        source_ip=src_ip or "",
+    )
+    db.add(event)
+
+    # Trim old events beyond the hard cap to keep the table from growing unboundedly.
+    count = (
+        db.query(models.WebhookEvent)
+        .filter(models.WebhookEvent.webhook_id == w.id)
+        .count()
+    )
+    if count >= _WEBHOOK_MAX_EVENTS_PER_HOOK:
+        overflow = count - _WEBHOOK_MAX_EVENTS_PER_HOOK + 1
+        old_ids = (
+            db.query(models.WebhookEvent.id)
+            .filter(models.WebhookEvent.webhook_id == w.id)
+            .order_by(models.WebhookEvent.id.asc())
+            .limit(overflow)
+            .all()
+        )
+        if old_ids:
+            db.query(models.WebhookEvent).filter(
+                models.WebhookEvent.id.in_([r[0] for r in old_ids])
+            ).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "webhook": w.slug}
+
+
+@app.api_route("/hook/{slug}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
+async def webhook_receive_root(slug: str, request: Request, db: Session = Depends(get_db)):
+    return await _record_webhook(request, slug, "", db)
+
+
+@app.api_route("/hook/{slug}/{extra:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
+async def webhook_receive_subpath(slug: str, extra: str, request: Request, db: Session = Depends(get_db)):
+    return await _record_webhook(request, slug, extra, db)

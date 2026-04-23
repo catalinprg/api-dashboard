@@ -208,6 +208,41 @@ class PresetOut(PresetBase):
     updated_at: str
 
 
+class WebhookCreate(BaseModel):
+    name: str = ""
+    notes: str = ""
+
+
+class WebhookUpdate(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class WebhookOut(BaseModel):
+    id: int
+    slug: str
+    name: str
+    notes: str
+    enabled: bool
+    created_at: str
+    event_count: int = 0
+    last_event_at: Optional[str] = None
+
+
+class WebhookEventOut(BaseModel):
+    id: int
+    webhook_id: int
+    method: str
+    path: str
+    query_string: str
+    headers: Dict[str, str]
+    body: str
+    content_type: str
+    source_ip: str
+    received_at: str
+
+
 class HistoryOut(BaseModel):
     id: int
     kind: str
