@@ -99,6 +99,38 @@ class RequestPreset(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ScheduledJob(Base):
+    __tablename__ = "scheduled_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, default="")
+    enabled = Column(Boolean, default=True)
+    # "interval" (every N seconds) or "cron" (5-field expression)
+    trigger_type = Column(String, default="interval")
+    interval_seconds = Column(Integer, nullable=True)
+    cron_expr = Column(String, default="")
+
+    # What to execute — mirrors HTTPInvokeRequest so we can reuse invoke logic.
+    provider_id = Column(Integer, nullable=True)
+    endpoint_id = Column(Integer, nullable=True)
+    method = Column(String, default="")
+    url = Column(String, default="")
+    path = Column(String, default="")
+    headers_json = Column(Text, default="{}")
+    query_json = Column(Text, default="{}")
+    body_json = Column(Text, default="")  # JSON-encoded: string | object | null
+    body_type = Column(String, default="json")
+
+    last_run_at = Column(DateTime, nullable=True)
+    last_ok = Column(Boolean, nullable=True)
+    last_status_code = Column(Integer, nullable=True)
+    last_latency_ms = Column(Integer, nullable=True)
+    last_error = Column(Text, default="")
+    next_run_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Webhook(Base):
     __tablename__ = "webhooks"
 

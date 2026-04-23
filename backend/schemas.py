@@ -208,6 +208,56 @@ class PresetOut(PresetBase):
     updated_at: str
 
 
+class ScheduledJobBase(BaseModel):
+    name: str = ""
+    enabled: bool = True
+    trigger_type: str = "interval"  # "interval" | "cron"
+    interval_seconds: Optional[int] = None
+    cron_expr: str = ""
+    provider_id: Optional[int] = None
+    endpoint_id: Optional[int] = None
+    method: str = ""
+    url: str = ""
+    path: str = ""
+    headers: Dict[str, str] = Field(default_factory=dict)
+    query: Dict[str, str] = Field(default_factory=dict)
+    body: Optional[Any] = None
+    body_type: str = "json"
+
+
+class ScheduledJobCreate(ScheduledJobBase):
+    pass
+
+
+class ScheduledJobUpdate(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    trigger_type: Optional[str] = None
+    interval_seconds: Optional[int] = None
+    cron_expr: Optional[str] = None
+    provider_id: Optional[int] = None
+    endpoint_id: Optional[int] = None
+    method: Optional[str] = None
+    url: Optional[str] = None
+    path: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None
+    query: Optional[Dict[str, str]] = None
+    body: Optional[Any] = None
+    body_type: Optional[str] = None
+
+
+class ScheduledJobOut(ScheduledJobBase):
+    id: int
+    last_run_at: Optional[str] = None
+    last_ok: Optional[bool] = None
+    last_status_code: Optional[int] = None
+    last_latency_ms: Optional[int] = None
+    last_error: str = ""
+    next_run_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
 class WebhookCreate(BaseModel):
     name: str = ""
     notes: str = ""

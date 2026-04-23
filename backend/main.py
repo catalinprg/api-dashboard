@@ -16,7 +16,7 @@ import auth as auth_module
 import models
 import schemas
 from crypto import encrypt, decrypt
-from database import Base, engine, get_db
+from database import Base, engine, get_db, SessionLocal
 
 Base.metadata.create_all(bind=engine)
 
@@ -1889,3 +1889,293 @@ async def webhook_receive_root(slug: str, request: Request, db: Session = Depend
 @app.api_route("/hook/{slug}/{extra:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
 async def webhook_receive_subpath(slug: str, extra: str, request: Request, db: Session = Depends(get_db)):
     return await _record_webhook(request, slug, extra, db)
+
+
+# ---------- Scheduled requests ----------
+#
+# APScheduler BackgroundScheduler runs alongside the FastAPI app. Jobs are
+# persisted in the scheduled_jobs table; on startup we load + register all
+# enabled jobs. Create/update/delete re-syncs the scheduler.
+#
+# Set SCHEDULER_DISABLED=1 to skip background execution (tests use the
+# synchronous /run endpoint instead).
+
+from datetime import datetime as _dt
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+
+_scheduler: Optional[BackgroundScheduler] = None
+
+
+def _scheduler_enabled() -> bool:
+    return os.environ.get("SCHEDULER_DISABLED", "").lower() not in {"1", "true", "yes"}
+
+
+def _get_scheduler() -> Optional[BackgroundScheduler]:
+    global _scheduler
+    if not _scheduler_enabled():
+        return None
+    if _scheduler is None:
+        _scheduler = BackgroundScheduler(timezone="UTC")
+        _scheduler.start()
+    return _scheduler
+
+
+def _parse_cron(expr: str) -> CronTrigger:
+    """Accept a standard 5-field cron expression: minute hour dom month dow."""
+    parts = (expr or "").strip().split()
+    if len(parts) != 5:
+        raise HTTPException(400, "Cron expression must have 5 fields: minute hour day-of-month month day-of-week")
+    minute, hour, dom, month, dow = parts
+    return CronTrigger(minute=minute, hour=hour, day=dom, month=month, day_of_week=dow, timezone="UTC")
+
+
+def _build_trigger(job: models.ScheduledJob):
+    if (job.trigger_type or "interval") == "cron":
+        return _parse_cron(job.cron_expr or "")
+    seconds = int(job.interval_seconds or 0)
+    if seconds < 10:
+        raise HTTPException(400, "Interval must be ≥ 10 seconds")
+    return IntervalTrigger(seconds=seconds)
+
+
+def _validate_trigger(job: models.ScheduledJob) -> None:
+    """Fail fast on bad cron/interval config — runs regardless of scheduler state."""
+    _build_trigger(job)
+
+
+def _schedule_one(job: models.ScheduledJob) -> None:
+    sched = _get_scheduler()
+    if sched is None:
+        return
+    sched.add_job(
+        _run_scheduled_job,
+        args=[job.id],
+        trigger=_build_trigger(job),
+        id=f"job-{job.id}",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
+
+
+def _unschedule_one(job_id: int) -> None:
+    sched = _get_scheduler()
+    if sched is None:
+        return
+    try:
+        sched.remove_job(f"job-{job_id}")
+    except Exception:
+        pass
+
+
+def _execute_http_job(db: Session, job: models.ScheduledJob) -> dict:
+    """Build an HTTPInvokeRequest from the job and run it. Returns a summary dict."""
+    headers = {}
+    query = {}
+    body = None
+    try:
+        headers = json.loads(job.headers_json or "{}") or {}
+    except Exception:
+        pass
+    try:
+        query = json.loads(job.query_json or "{}") or {}
+    except Exception:
+        pass
+    try:
+        body = json.loads(job.body_json) if job.body_json else None
+    except Exception:
+        body = job.body_json
+    payload = schemas.HTTPInvokeRequest(
+        provider_id=job.provider_id,
+        endpoint_id=job.endpoint_id,
+        method=job.method or None,
+        url=job.url or None,
+        path=job.path or None,
+        headers={str(k): str(v) for k, v in headers.items()} if isinstance(headers, dict) else {},
+        query={str(k): str(v) for k, v in query.items()} if isinstance(query, dict) else {},
+        body=body,
+        body_type=job.body_type or "json",
+    )
+    # Re-enter the existing invoke handler so all auth / substitution / history
+    # behavior stays in one place.
+    result = invoke_http(payload, db)
+    return {
+        "ok": bool(result.ok),
+        "status_code": int(result.status_code or 0),
+        "latency_ms": int(result.latency_ms or 0),
+        "error": result.error or "",
+    }
+
+
+def _run_scheduled_job(job_id: int) -> None:
+    """Called by APScheduler on a worker thread."""
+    db = SessionLocal()
+    try:
+        job = db.get(models.ScheduledJob, job_id)
+        if not job or not job.enabled:
+            return
+        try:
+            summary = _execute_http_job(db, job)
+        except Exception as e:
+            summary = {"ok": False, "status_code": 0, "latency_ms": 0, "error": str(e)[:500]}
+        job.last_run_at = _dt.utcnow()
+        job.last_ok = summary["ok"]
+        job.last_status_code = summary["status_code"]
+        job.last_latency_ms = summary["latency_ms"]
+        job.last_error = summary["error"] or ""
+        # Best-effort next_run_at — APScheduler knows the canonical next fire time.
+        sched = _get_scheduler()
+        if sched is not None:
+            apscheduler_job = sched.get_job(f"job-{job.id}")
+            if apscheduler_job and apscheduler_job.next_run_time:
+                job.next_run_at = apscheduler_job.next_run_time.replace(tzinfo=None)
+        db.commit()
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def _load_scheduled_jobs():
+    if not _scheduler_enabled():
+        return
+    db = SessionLocal()
+    try:
+        jobs = db.query(models.ScheduledJob).filter(models.ScheduledJob.enabled == True).all()  # noqa: E712
+        for j in jobs:
+            try:
+                _schedule_one(j)
+            except Exception:
+                # One bad job shouldn't take down startup.
+                pass
+    finally:
+        db.close()
+
+
+@app.on_event("shutdown")
+def _stop_scheduler():
+    global _scheduler
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        _scheduler = None
+
+
+def _sched_job_to_out(j: models.ScheduledJob) -> dict:
+    def _parse(raw, default):
+        if not raw:
+            return default
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, type(default)) else default
+        except Exception:
+            return default
+    body_val: Any = None
+    if j.body_json:
+        try:
+            body_val = json.loads(j.body_json)
+        except Exception:
+            body_val = j.body_json
+    return {
+        "id": j.id,
+        "name": j.name or "",
+        "enabled": bool(j.enabled),
+        "trigger_type": j.trigger_type or "interval",
+        "interval_seconds": j.interval_seconds,
+        "cron_expr": j.cron_expr or "",
+        "provider_id": j.provider_id,
+        "endpoint_id": j.endpoint_id,
+        "method": j.method or "",
+        "url": j.url or "",
+        "path": j.path or "",
+        "headers": _parse(j.headers_json, {}),
+        "query": _parse(j.query_json, {}),
+        "body": body_val,
+        "body_type": j.body_type or "json",
+        "last_run_at": j.last_run_at.isoformat() if j.last_run_at else None,
+        "last_ok": j.last_ok,
+        "last_status_code": j.last_status_code,
+        "last_latency_ms": j.last_latency_ms,
+        "last_error": j.last_error or "",
+        "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+        "created_at": j.created_at.isoformat() if j.created_at else "",
+        "updated_at": j.updated_at.isoformat() if j.updated_at else "",
+    }
+
+
+def _apply_job_payload(j: models.ScheduledJob, data: Dict[str, Any]) -> None:
+    for k in ("name", "enabled", "trigger_type", "interval_seconds", "cron_expr",
+              "provider_id", "endpoint_id", "method", "url", "path", "body_type"):
+        if k in data:
+            setattr(j, k, data[k])
+    if "headers" in data:
+        j.headers_json = json.dumps(data["headers"] or {})
+    if "query" in data:
+        j.query_json = json.dumps(data["query"] or {})
+    if "body" in data:
+        j.body_json = json.dumps(data["body"]) if data["body"] is not None else ""
+
+
+@app.get("/api/scheduled-jobs", response_model=List[schemas.ScheduledJobOut])
+def list_scheduled_jobs(db: Session = Depends(get_db)):
+    return [_sched_job_to_out(j) for j in db.query(models.ScheduledJob).order_by(models.ScheduledJob.created_at.desc()).all()]
+
+
+@app.post("/api/scheduled-jobs", response_model=schemas.ScheduledJobOut)
+def create_scheduled_job(payload: schemas.ScheduledJobCreate, db: Session = Depends(get_db)):
+    j = models.ScheduledJob()
+    _apply_job_payload(j, payload.model_dump())
+    _validate_trigger(j)  # 400s on bad cron / interval before we hit the DB
+    db.add(j)
+    db.commit()
+    db.refresh(j)
+    if j.enabled:
+        _schedule_one(j)
+    return _sched_job_to_out(j)
+
+
+@app.patch("/api/scheduled-jobs/{job_id}", response_model=schemas.ScheduledJobOut)
+def update_scheduled_job(job_id: int, payload: schemas.ScheduledJobUpdate, db: Session = Depends(get_db)):
+    j = db.get(models.ScheduledJob, job_id)
+    if not j:
+        raise HTTPException(404, "Job not found")
+    _apply_job_payload(j, payload.model_dump(exclude_unset=True))
+    _validate_trigger(j)
+    db.commit()
+    db.refresh(j)
+    _unschedule_one(j.id)
+    if j.enabled:
+        _schedule_one(j)
+    return _sched_job_to_out(j)
+
+
+@app.delete("/api/scheduled-jobs/{job_id}")
+def delete_scheduled_job(job_id: int, db: Session = Depends(get_db)):
+    j = db.get(models.ScheduledJob, job_id)
+    if not j:
+        raise HTTPException(404, "Job not found")
+    _unschedule_one(j.id)
+    db.delete(j)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/scheduled-jobs/{job_id}/run")
+def run_scheduled_job_now(job_id: int, db: Session = Depends(get_db)):
+    j = db.get(models.ScheduledJob, job_id)
+    if not j:
+        raise HTTPException(404, "Job not found")
+    try:
+        summary = _execute_http_job(db, j)
+    except Exception as e:
+        summary = {"ok": False, "status_code": 0, "latency_ms": 0, "error": str(e)[:500]}
+    j.last_run_at = _dt.utcnow()
+    j.last_ok = summary["ok"]
+    j.last_status_code = summary["status_code"]
+    j.last_latency_ms = summary["latency_ms"]
+    j.last_error = summary["error"] or ""
+    db.commit()
+    db.refresh(j)
+    return {"ok": summary["ok"], "status_code": summary["status_code"], "latency_ms": summary["latency_ms"], "error": summary["error"], "job": _sched_job_to_out(j)}

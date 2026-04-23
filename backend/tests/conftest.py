@@ -14,6 +14,7 @@ from cryptography.fernet import Fernet
 _TMP = Path(tempfile.mkdtemp(prefix="api-dashboard-test-"))
 os.environ["DASHBOARD_DB_PATH"] = str(_TMP / "test.db")
 os.environ["DASHBOARD_SECRET_KEY"] = Fernet.generate_key().decode()
+os.environ["SCHEDULER_DISABLED"] = "1"  # don't start background threads in tests
 os.environ.pop("GITHUB_CLIENT_ID", None)  # ensure auth middleware is disabled
 
 # Make backend/ importable as a top-level package from tests/.

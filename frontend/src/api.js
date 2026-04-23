@@ -57,6 +57,12 @@ export const api = {
   exportConfig: (includeKeys = true) => request(`/api/config/export?include_keys=${includeKeys ? 'true' : 'false'}`),
   importConfig: (data) => request('/api/config/import', { method: 'POST', body: data }),
   importSpec: (data) => request('/api/config/import-spec', { method: 'POST', body: data }),
+  // Scheduled jobs
+  listScheduledJobs: () => request('/api/scheduled-jobs'),
+  createScheduledJob: (data) => request('/api/scheduled-jobs', { method: 'POST', body: data }),
+  updateScheduledJob: (id, data) => request(`/api/scheduled-jobs/${id}`, { method: 'PATCH', body: data }),
+  deleteScheduledJob: (id) => request(`/api/scheduled-jobs/${id}`, { method: 'DELETE' }),
+  runScheduledJob: (id) => request(`/api/scheduled-jobs/${id}/run`, { method: 'POST' }),
   // Webhooks
   listWebhooks: () => request('/api/webhooks'),
   createWebhook: (data) => request('/api/webhooks', { method: 'POST', body: data }),
