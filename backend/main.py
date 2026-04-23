@@ -1086,6 +1086,78 @@ def invoke_http(payload: schemas.HTTPInvokeRequest, db: Session = Depends(get_db
     return out
 
 
+@app.post("/api/invoke/graphql", response_model=schemas.InvokeResponse)
+def invoke_graphql(payload: schemas.GraphQLInvokeRequest, db: Session = Depends(get_db)):
+    provider = db.get(models.Provider, payload.provider_id)
+    if not provider or not provider.enabled:
+        raise HTTPException(400, "Provider not found or disabled")
+    if provider.kind != "graphql":
+        raise HTTPException(400, f"Provider '{provider.name}' is not a GraphQL provider")
+
+    vars = _parse_variables(getattr(provider, "variables", None))
+    url = _subst_str((provider.base_url or "").strip(), vars)
+    if not url:
+        raise HTTPException(400, "Provider has no base URL configured")
+
+    body_obj: Dict[str, Any] = {"query": payload.query}
+    if payload.variables:
+        body_obj["variables"] = payload.variables
+    if payload.operation_name:
+        body_obj["operationName"] = payload.operation_name
+
+    headers: Dict[str, str] = {"Content-Type": "application/json", "Accept": "application/json"}
+    try:
+        extra = json.loads(provider.extra_headers or "{}")
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if k.startswith("hmac_") or k.startswith("jwt_"):
+                    continue
+                headers.setdefault(k, str(v))
+    except Exception:
+        pass
+    headers = {k: _subst_str(str(v), vars) for k, v in headers.items()}
+
+    body_bytes = json.dumps(body_obj).encode()
+    _build_auth(provider, headers, {}, method="POST", url=url, body_bytes=body_bytes)
+
+    echo = schemas.RequestEcho(
+        method="POST", url=url,
+        headers=_mask_headers(headers), query={},
+        body=body_obj,
+    )
+
+    # Label the history row with the operation name or the first line of the query
+    op = payload.operation_name or (payload.query.strip().split("\n", 1)[0][:80] if payload.query else "")
+    label = f"{provider.name} · {op}" if op else provider.name
+
+    start = time.time()
+    try:
+        with httpx.Client(timeout=60.0, follow_redirects=True) as cli:
+            r = cli.post(url, headers=headers, json=body_obj)
+    except httpx.HTTPError as exc:
+        err_out = schemas.InvokeResponse(
+            ok=False, status_code=0, latency_ms=int((time.time() - start) * 1000),
+            headers={}, body=None, error=str(exc), request=echo,
+        )
+        _log_history(
+            db, kind="graphql", provider=provider, label=label,
+            request_dict=echo.model_dump(), response=err_out,
+        )
+        return err_out
+    latency = int((time.time() - start) * 1000)
+    out = _parse_response(r)
+    out.latency_ms = latency
+    out.request = echo
+    # GraphQL 200 with { "errors": [...] } is still a functional error — surface that.
+    if out.ok and isinstance(out.body, dict) and out.body.get("errors"):
+        out.error = "; ".join(str(e.get("message", e)) for e in out.body["errors"][:3])
+    _log_history(
+        db, kind="graphql", provider=provider, label=label,
+        request_dict=echo.model_dump(), response=out,
+    )
+    return out
+
+
 # ---------- Chat sessions ----------
 
 def _session_msg_to_out(m: models.ChatMessage) -> dict:

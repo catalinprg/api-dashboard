@@ -34,6 +34,7 @@ export const api = {
   deleteEndpoint: (id) => request(`/api/endpoints/${id}`, { method: 'DELETE' }),
   invokeLLM: (data) => request('/api/invoke/llm', { method: 'POST', body: data }),
   invokeHTTP: (data) => request('/api/invoke/http', { method: 'POST', body: data }),
+  invokeGraphQL: (data) => request('/api/invoke/graphql', { method: 'POST', body: data }),
   listHistory: (limit = 200, q = '') => request(`/api/history?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
   deleteHistory: (id) => request(`/api/history/${id}`, { method: 'DELETE' }),
   clearHistory: () => request('/api/history', { method: 'DELETE' }),

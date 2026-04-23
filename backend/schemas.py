@@ -145,6 +145,13 @@ class HTTPInvokeRequest(BaseModel):
     body_type: str = "json"  # json | text | form
 
 
+class GraphQLInvokeRequest(BaseModel):
+    provider_id: int
+    query: str
+    variables: Optional[Dict[str, Any]] = None
+    operation_name: Optional[str] = None
+
+
 class RequestEcho(BaseModel):
     method: str
     url: str

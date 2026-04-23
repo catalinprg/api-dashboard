@@ -132,6 +132,7 @@ export default function ProviderForm({ provider, onClose, onSaved }) {
                 <label className="label">Kind</label>
                 <select className="select" value={form.kind} onChange={(e) => set('kind', e.target.value)}>
                   <option value="http">HTTP / REST</option>
+                  <option value="graphql">GraphQL</option>
                   <option value="llm">LLM (chat completions)</option>
                 </select>
               </div>
