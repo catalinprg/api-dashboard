@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react'
 import { Menu } from 'lucide-react'
 import Sidebar from './components/Sidebar.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
-import Playground from './components/Playground.jsx'
+import AIPanel from './components/AIPanel.jsx'
+import HTTPPanel from './components/HTTPPanel.jsx'
 import HistoryPanel from './components/HistoryPanel.jsx'
 import AuthGate from './components/AuthGate.jsx'
 import { api } from './api.js'
 
 const VIEW_LABELS = {
-  playground: 'Playground',
+  ai: 'AI API',
+  http: 'HTTP / REST',
   history: 'History',
   admin: 'Admin',
 }
@@ -18,7 +20,7 @@ export default function App() {
 }
 
 function Shell({ user }) {
-  const [view, setView] = useState('playground')
+  const [view, setView] = useState('ai')
   const [providers, setProviders] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -80,8 +82,10 @@ function Shell({ user }) {
           <AdminPanel providers={providers} reload={reload} />
         ) : view === 'history' ? (
           <HistoryPanel />
+        ) : view === 'http' ? (
+          <HTTPPanel providers={providers} />
         ) : (
-          <Playground providers={providers} />
+          <AIPanel providers={providers} />
         )}
       </main>
     </div>
