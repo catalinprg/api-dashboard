@@ -60,6 +60,32 @@ cd frontend && npm install && npm run dev
 Vite proxies `/api` to the FastAPI backend on port 8000.
 </details>
 
+## Deploying updates to a server
+
+Once the server is set up (`setup.sh` + nginx + a systemd unit for the backend), redeploying after a `git push` is one command. On the server:
+
+```bash
+~/api-dashboard/deploy.sh
+```
+
+Or from your laptop in one go:
+
+```bash
+ssh -i your-key.pem user@your-server '~/api-dashboard/deploy.sh'
+```
+
+What it does:
+
+1. `git pull --ff-only`
+2. Reinstall backend deps (no-op if unchanged)
+3. `npm install && npm run build` for the frontend
+4. `rsync` the build into `/var/www/api-dashboard/` (where nginx serves from)
+5. `systemctl restart api-dashboard` so the new Python code loads
+
+`backend/.env`, `backend/.secret.key`, and `backend/data.db` are never touched, so your config, encryption key, and history survive every deploy.
+
+Want fully automated deploy-on-push? Add a GitHub Actions workflow that SSHes in and runs `deploy.sh` whenever `main` moves. Not included here because it changes the security surface (a repo secret that can SSH your server) — worth opting into deliberately.
+
 ## Providers
 
 Each provider is either:
