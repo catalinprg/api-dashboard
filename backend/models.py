@@ -21,6 +21,11 @@ class Provider(Base):
     models = Column(Text, default="[]")  # JSON list of model ids
     extra_headers = Column(Text, default="{}")  # JSON string
     variables = Column(Text, default="{}")  # JSON dict of {var_name: value} for {{var}} substitution
+    # OAuth 2.0 (client credentials) — client_secret reuses api_key_encrypted
+    oauth_client_id = Column(String, default="")
+    oauth_token_url = Column(String, default="")
+    oauth_scope = Column(String, default="")
+    oauth_auth_style = Column(String, default="body")  # "body" (creds in form) or "basic" (Basic header)
     enabled = Column(Boolean, default=True)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)

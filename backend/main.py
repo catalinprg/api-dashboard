@@ -31,6 +31,14 @@ def _migrate_schema() -> None:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN models TEXT DEFAULT '[]'"))
             if "variables" not in cols:
                 conn.execute(text("ALTER TABLE providers ADD COLUMN variables TEXT DEFAULT '{}'"))
+            if "oauth_client_id" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_client_id TEXT DEFAULT ''"))
+            if "oauth_token_url" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_token_url TEXT DEFAULT ''"))
+            if "oauth_scope" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_scope TEXT DEFAULT ''"))
+            if "oauth_auth_style" not in cols:
+                conn.execute(text("ALTER TABLE providers ADD COLUMN oauth_auth_style TEXT DEFAULT 'body'"))
     if "chat_sessions" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("chat_sessions")}
         with engine.begin() as conn:
@@ -242,6 +250,10 @@ def _provider_to_out(p: models.Provider) -> dict:
         "models": _parse_models(p.models),
         "extra_headers": p.extra_headers or "{}",
         "variables": getattr(p, "variables", None) or "{}",
+        "oauth_client_id": getattr(p, "oauth_client_id", "") or "",
+        "oauth_token_url": getattr(p, "oauth_token_url", "") or "",
+        "oauth_scope": getattr(p, "oauth_scope", "") or "",
+        "oauth_auth_style": getattr(p, "oauth_auth_style", "body") or "body",
         "enabled": p.enabled,
         "notes": p.notes or "",
         "has_api_key": bool(p.api_key_encrypted),
@@ -289,6 +301,10 @@ def create_provider(payload: schemas.ProviderCreate, db: Session = Depends(get_d
         models=json.dumps([m.strip() for m in (payload.models or []) if m.strip()]),
         extra_headers=payload.extra_headers or "{}",
         variables=payload.variables or "{}",
+        oauth_client_id=payload.oauth_client_id,
+        oauth_token_url=payload.oauth_token_url,
+        oauth_scope=payload.oauth_scope,
+        oauth_auth_style=payload.oauth_auth_style or "body",
         enabled=payload.enabled,
         notes=payload.notes,
         api_key_encrypted=encrypt(payload.api_key.strip()) if payload.api_key else "",
@@ -636,6 +652,9 @@ def _build_auth(
         import base64 as _b64
         # key is stored as "user:pass"
         headers["Authorization"] = "Basic " + _b64.b64encode(key.encode()).decode()
+    elif provider.auth_type == "oauth2_cc":
+        token = _oauth_cc_token(provider, client_secret=key)
+        headers["Authorization"] = f"Bearer {token}"
     elif provider.auth_type == "hmac":
         _apply_hmac(provider, headers, key, method=method, url=url, body=body_bytes)
     elif provider.auth_type == "jwt_hs":
@@ -692,6 +711,66 @@ def _apply_jwt_hs(provider, headers, secret):
     prefix = (provider.auth_prefix or "Bearer").strip()
     name = provider.auth_header_name or "Authorization"
     headers[name] = f"{prefix} {token}" if prefix else token
+
+
+# In-memory OAuth 2.0 client-credentials token cache, keyed by provider.id.
+# Value: {"access_token": str, "expires_at": float epoch seconds}.
+# Restart drops the cache; tokens refetch on next request — acceptable tradeoff.
+_oauth_cc_cache: Dict[int, Dict[str, Any]] = {}
+
+
+def _oauth_cc_token(provider, *, client_secret: str) -> str:
+    """Fetch (and cache) an OAuth 2.0 client-credentials access token.
+
+    Refreshes 30s before expiry to avoid edge-of-expiry 401s.
+    Raises HTTPException(502) if the token endpoint returns anything unusable.
+    """
+    import time as _time
+    now = _time.time()
+    cached = _oauth_cc_cache.get(provider.id)
+    if cached and cached["expires_at"] - 30 > now:
+        return cached["access_token"]
+
+    token_url = (provider.oauth_token_url or "").strip()
+    if not token_url:
+        raise HTTPException(400, "OAuth provider missing token URL")
+    client_id = (provider.oauth_client_id or "").strip()
+    if not client_id:
+        raise HTTPException(400, "OAuth provider missing client_id")
+
+    data = {"grant_type": "client_credentials"}
+    if provider.oauth_scope:
+        data["scope"] = provider.oauth_scope
+    auth = None
+    if (provider.oauth_auth_style or "body") == "basic":
+        auth = (client_id, client_secret)
+    else:
+        data["client_id"] = client_id
+        data["client_secret"] = client_secret
+
+    try:
+        with httpx.Client(timeout=15.0) as cli:
+            resp = cli.post(token_url, data=data, auth=auth, headers={"Accept": "application/json"})
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"OAuth token fetch failed: {e}")
+    if resp.status_code >= 400:
+        raise HTTPException(502, f"OAuth token endpoint returned {resp.status_code}: {resp.text[:300]}")
+    try:
+        payload = resp.json()
+    except Exception:
+        raise HTTPException(502, "OAuth token endpoint returned non-JSON response")
+    token = payload.get("access_token")
+    if not token:
+        raise HTTPException(502, f"OAuth token response missing access_token: {payload}")
+    try:
+        expires_in = int(payload.get("expires_in") or 3600)
+    except (TypeError, ValueError):
+        expires_in = 3600
+    _oauth_cc_cache[provider.id] = {
+        "access_token": token,
+        "expires_at": now + max(60, expires_in),
+    }
+    return token
 
 
 def _log_history(

@@ -36,6 +36,11 @@ class ProviderBase(BaseModel):
     models: List[str] = Field(default_factory=list)
     extra_headers: str = "{}"
     variables: str = "{}"  # JSON string of {var_name: value}
+    # OAuth 2.0 client-credentials (client_secret lives in api_key)
+    oauth_client_id: str = ""
+    oauth_token_url: str = ""
+    oauth_scope: str = ""
+    oauth_auth_style: str = "body"  # "body" | "basic"
     enabled: bool = True
     notes: str = ""
 
@@ -57,6 +62,10 @@ class ProviderUpdate(BaseModel):
     models: Optional[List[str]] = None
     extra_headers: Optional[str] = None
     variables: Optional[str] = None
+    oauth_client_id: Optional[str] = None
+    oauth_token_url: Optional[str] = None
+    oauth_scope: Optional[str] = None
+    oauth_auth_style: Optional[str] = None
     enabled: Optional[bool] = None
     notes: Optional[str] = None
     api_key: Optional[str] = None  # if provided, re-encrypt; empty string = clear
