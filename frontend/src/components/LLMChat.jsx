@@ -943,7 +943,7 @@ function Bubble({ msg, onEdit, onRegenerate, onReplyAsTool }) {
             ))}
           </div>
         )}
-        {!isUser && !isError && !isTool ? <Markdown text={text} /> : <div className="whitespace-pre-wrap">{text}</div>}
+        {!isUser && !isError && !isTool ? <Markdown text={stripThinking(text)} /> : <div className="whitespace-pre-wrap">{text}</div>}
         {toolCalls && toolCalls.length > 0 && (
           <div className="mt-2 space-y-2">
             {toolCalls.map((tc, i) => (
@@ -974,6 +974,15 @@ function Bubble({ msg, onEdit, onRegenerate, onReplyAsTool }) {
       </div>
     </div>
   )
+}
+
+function stripThinking(s) {
+  if (!s) return s
+  const closed = s.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+                  .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+  const open = closed.replace(/<think(?:ing)?>[\s\S]*$/i, '')
+                     .replace(/<thought>[\s\S]*$/i, '')
+  return open.replace(/^\s+/, '')
 }
 
 function extractTextFromResponse(body) {
