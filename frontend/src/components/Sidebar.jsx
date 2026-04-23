@@ -77,7 +77,7 @@ export default function Sidebar({ view, setView, providerCount, navOpen, onClose
         <div className="px-4 py-3 border-t border-ink-700 text-[11px] text-ink-400 space-y-2">
           {user && !user.auth_disabled && (
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate" title={user.email}>{user.email}</span>
+              <span className="truncate" title={user.email || user.login}>{user.login ? `@${user.login}` : user.email}</span>
               <button
                 onClick={logout}
                 className="text-ink-400 hover:text-red-700 underline-offset-2 hover:underline"

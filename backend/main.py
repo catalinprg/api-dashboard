@@ -125,7 +125,7 @@ app.add_middleware(
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
     """
-    If GOOGLE_CLIENT_ID is set, gate every /api/* route behind a valid session cookie.
+    If GITHUB_CLIENT_ID is set, gate every /api/* route behind a valid session cookie.
     Exceptions: /health, /api/auth/*. Non-API paths (the frontend) are always served
     so the login page can render.
     """
@@ -144,11 +144,11 @@ async def _auth_middleware(request: Request, call_next):
 # ---------- Auth endpoints ----------
 
 def _redirect_uri(request: Request) -> str:
-    env = os.environ.get("GOOGLE_REDIRECT_URI")
+    env = os.environ.get("GITHUB_REDIRECT_URI")
     if env:
         return env
     # Fallback: derive from incoming request. In production set the env var explicitly.
-    return str(request.base_url).rstrip("/") + "/api/auth/google/callback"
+    return str(request.base_url).rstrip("/") + "/api/auth/github/callback"
 
 
 @app.get("/api/auth/status")
@@ -164,20 +164,20 @@ def auth_me(request: Request):
     return user
 
 
-@app.get("/api/auth/google/start")
-def auth_google_start(request: Request):
+@app.get("/api/auth/github/start")
+def auth_github_start(request: Request):
     if not auth_module.auth_enabled():
-        raise HTTPException(400, "Auth is not configured (set GOOGLE_CLIENT_ID)")
+        raise HTTPException(400, "Auth is not configured (set GITHUB_CLIENT_ID)")
     state = secrets.token_urlsafe(24)
     redirect_uri = _redirect_uri(request)
-    url = auth_module.build_google_consent_url(state, redirect_uri)
+    url = auth_module.build_github_consent_url(state, redirect_uri)
     resp = RedirectResponse(url)
     resp.set_cookie(auth_module.STATE_COOKIE, state, max_age=600, httponly=True, samesite="lax", path="/")
     return resp
 
 
-@app.get("/api/auth/google/callback")
-def auth_google_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+@app.get("/api/auth/github/callback")
+def auth_github_callback(request: Request, code: str = "", state: str = "", error: str = ""):
     if not auth_module.auth_enabled():
         raise HTTPException(400, "Auth is not configured")
     if error:
@@ -191,21 +191,32 @@ def auth_google_callback(request: Request, code: str = "", state: str = "", erro
     redirect_uri = _redirect_uri(request)
     try:
         tokens = auth_module.exchange_code_for_token(code, redirect_uri)
-        userinfo = auth_module.fetch_userinfo(tokens["access_token"])
+        access_token = tokens.get("access_token")
+        if not access_token:
+            raise HTTPException(502, f"GitHub token exchange failed: {tokens.get('error_description') or tokens}")
+        user = auth_module.fetch_user(access_token)
+        email = auth_module.fetch_primary_verified_email(access_token)
     except httpx.HTTPError as exc:
-        raise HTTPException(502, f"Google token exchange failed: {exc}")
+        raise HTTPException(502, f"GitHub token exchange failed: {exc}")
 
-    email = (userinfo.get("email") or "").lower()
-    if not userinfo.get("email_verified"):
-        raise HTTPException(403, "Email not verified by Google")
-    allow = auth_module.allowed_emails()
-    if allow and email not in allow:
-        raise HTTPException(403, f"{email} is not on the allowlist")
+    login = (user.get("login") or "").lower()
+    if not login:
+        raise HTTPException(502, "GitHub did not return a login")
+
+    allow_logins = auth_module.allowed_logins()
+    allow_emails = auth_module.allowed_emails()
+    if allow_logins:
+        if login not in allow_logins:
+            raise HTTPException(403, f"@{login} is not on the allowlist")
+    elif allow_emails:
+        if not email or email not in allow_emails:
+            raise HTTPException(403, f"{email or '(no verified email)'} is not on the allowlist")
+    # else: both empty → accept any GitHub user
 
     # Redirect back to the frontend root (works for both dev and prod)
     dest = os.environ.get("POST_LOGIN_REDIRECT", "/")
     resp = RedirectResponse(dest)
-    auth_module.issue_session_cookie(resp, email)
+    auth_module.issue_session_cookie(resp, login, email)
     resp.delete_cookie(auth_module.STATE_COOKIE, path="/")
     return resp
 

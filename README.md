@@ -140,42 +140,47 @@ Every LLM and HTTP request is logged. The History tab supports:
 - **Import config** — restores a previously exported file. Existing providers with the same name are skipped.
 - **Import REST spec** — auto-detects **OpenAPI 3.x**, **Postman Collection 2.1**, or **HAR** files and creates a new HTTP/REST provider with endpoints. LLMs don't have spec files — add them manually.
 
-## Authentication (Google OAuth)
+## Authentication (GitHub OAuth)
 
-The dashboard has **optional Google OAuth login** with an email allowlist. When no OAuth config is set, the app runs with no auth (dev mode) — perfect for localhost. When you expose it to the internet, configure OAuth.
+The dashboard has **optional GitHub OAuth login** with a username (or email) allowlist. When no OAuth config is set, the app runs with no auth (dev mode) — perfect for localhost. When you expose it to the internet, configure OAuth.
 
-### One-time Google Cloud setup (5 minutes)
+### One-time GitHub setup (≈3 minutes)
 
-1. Open [Google Cloud Console](https://console.cloud.google.com/) → pick/create a project.
-2. **APIs & Services → OAuth consent screen** → User type: **External** → fill in app name, your email. Scopes: add `openid`, `email`, `profile`. Add your email(s) as test users.
-3. **APIs & Services → Credentials → Create Credentials → OAuth client ID** → Application type: **Web application**.
-4. **Authorized redirect URIs** — add both (or whichever you need):
-   - `http://localhost:5173/api/auth/google/callback` (local dev)
-   - `https://dashboard.yourdomain.com/api/auth/google/callback` (production)
-5. Copy the **Client ID** and **Client secret**.
+1. GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Fill in:
+   - **Application name:** API Dashboard (or anything).
+   - **Homepage URL:** `http://localhost:5173` (or your prod URL).
+   - **Authorization callback URL** — must match exactly:
+     - `http://localhost:5173/api/auth/github/callback` (local dev), or
+     - `https://dashboard.yourdomain.com/api/auth/github/callback` (production).
+3. Copy the **Client ID** and generate a **Client Secret**.
+
+No consent-screen review, no test-user list — GitHub OAuth Apps are usable immediately.
 
 ### Configure the dashboard
 
 ```bash
 cp backend/.env.example backend/.env
 # edit backend/.env:
-#   GOOGLE_CLIENT_ID=...
-#   GOOGLE_CLIENT_SECRET=...
-#   GOOGLE_REDIRECT_URI=http://localhost:5173/api/auth/google/callback
-#   ALLOWED_EMAILS=you@gmail.com
+#   GITHUB_CLIENT_ID=...
+#   GITHUB_CLIENT_SECRET=...
+#   GITHUB_REDIRECT_URI=http://localhost:5173/api/auth/github/callback
+#   ALLOWED_LOGINS=your-github-username,other-person
 ```
 
-Restart `./dev.sh` — now every `/api/*` call requires a valid session cookie. The frontend shows a **Sign in with Google** screen; after OAuth the cookie is set and the dashboard unlocks.
+Restart `./dev.sh` — now every `/api/*` call requires a valid session cookie. The frontend shows a **Continue with GitHub** screen; after OAuth the cookie is set and the dashboard unlocks.
 
 ### How the allowlist works
 
-- The OAuth flow returns a Google-verified `email`. The backend rejects anyone whose email isn't in `ALLOWED_EMAILS` (comma-separated).
-- Empty `ALLOWED_EMAILS` = accept any verified Google account — **not recommended**; always set it.
-- Add multiple emails: `ALLOWED_EMAILS=you@gmail.com,spouse@gmail.com`.
+Two modes, in this order of precedence:
+
+- **`ALLOWED_LOGINS`** (preferred) — comma-separated GitHub usernames. Stable, case-insensitive, can't be spoofed by changing email. Example: `ALLOWED_LOGINS=you,teammate`.
+- **`ALLOWED_EMAILS`** — comma-separated verified primary emails. Only used if `ALLOWED_LOGINS` is empty. The `user:email` scope is requested so GitHub returns the primary verified email even when it's private.
+- If **both** are empty, any GitHub user can sign in — **not recommended**; always set one.
 
 ### Turning auth off again
 
-Remove `GOOGLE_CLIENT_ID` from the env (or delete `backend/.env`). Auth silently disables and the app becomes open again.
+Remove `GITHUB_CLIENT_ID` from the env (or delete `backend/.env`). Auth silently disables and the app becomes open again.
 
 ## Security notes
 

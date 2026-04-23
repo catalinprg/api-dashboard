@@ -1,17 +1,19 @@
-"""Google OAuth + HttpOnly session cookie auth.
+"""GitHub OAuth + HttpOnly session cookie auth.
 
-Auth is **enabled only when GOOGLE_CLIENT_ID is set in the environment**. If it's
+Auth is **enabled only when GITHUB_CLIENT_ID is set in the environment**. If it's
 missing, the middleware passes everything through (dev-friendly default).
 
 Env vars:
-  GOOGLE_CLIENT_ID         — from Google Cloud Console OAuth client
-  GOOGLE_CLIENT_SECRET     — from Google Cloud Console OAuth client
-  GOOGLE_REDIRECT_URI      — e.g. http://localhost:5173/api/auth/google/callback
-                             (must exactly match a redirect URI registered for the OAuth client)
-  ALLOWED_EMAILS           — comma-separated allowlist; empty = allow any verified Google email
+  GITHUB_CLIENT_ID         — from GitHub OAuth App (Settings → Developer settings → OAuth Apps)
+  GITHUB_CLIENT_SECRET     — from the same OAuth App
+  GITHUB_REDIRECT_URI      — e.g. http://localhost:5173/api/auth/github/callback
+                             (must exactly match the Authorization callback URL on the OAuth App)
+  ALLOWED_LOGINS           — comma-separated GitHub username allowlist (preferred; stable identifier)
+  ALLOWED_EMAILS           — comma-separated email allowlist (used only if ALLOWED_LOGINS is empty)
+                             empty + no ALLOWED_LOGINS = allow any GitHub user
   SESSION_SECRET           — HMAC key for signing session cookies (random ≥32 chars)
                              (falls back to backend/.secret.key contents if unset)
-  COOKIE_SECURE            — "true"/"false"/"auto" (auto = off in dev, on in prod detection)
+  COOKIE_SECURE            — "true"/"false"/"auto" (auto = on if redirect URI is https)
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 
 
 def auth_enabled() -> bool:
-    return bool(os.environ.get("GOOGLE_CLIENT_ID"))
+    return bool(os.environ.get("GITHUB_CLIENT_ID"))
 
 
 def _secret() -> bytes:
@@ -47,6 +49,11 @@ def _secret() -> bytes:
     if key_path.exists():
         return key_path.read_bytes()
     raise RuntimeError("SESSION_SECRET (or backend/.secret.key) required when auth is enabled")
+
+
+def allowed_logins() -> list[str]:
+    raw = os.environ.get("ALLOWED_LOGINS", "")
+    return [u.strip().lower() for u in raw.split(",") if u.strip()]
 
 
 def allowed_emails() -> list[str]:
@@ -93,11 +100,17 @@ def _cookie_secure_flag() -> bool:
     if mode == "false":
         return False
     # auto: on if redirect URI is https, off otherwise
-    return (os.environ.get("GOOGLE_REDIRECT_URI") or "").startswith("https://")
+    return (os.environ.get("GITHUB_REDIRECT_URI") or "").startswith("https://")
 
 
-def issue_session_cookie(resp: Response, email: str) -> None:
-    token = _sign({"email": email, "exp": int(time.time()) + COOKIE_MAX_AGE, "iat": int(time.time())})
+def issue_session_cookie(resp: Response, login: str, email: Optional[str] = None) -> None:
+    payload = {
+        "login": login,
+        "email": email or "",
+        "exp": int(time.time()) + COOKIE_MAX_AGE,
+        "iat": int(time.time()),
+    }
+    token = _sign(payload)
     resp.set_cookie(
         COOKIE_NAME,
         token,
@@ -117,7 +130,7 @@ def clear_session_cookie(resp: Response) -> None:
 
 def current_user(request: Request) -> Optional[dict]:
     if not auth_enabled():
-        return {"email": "local", "auth_disabled": True}
+        return {"login": "local", "email": "local", "auth_disabled": True}
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return None
@@ -131,46 +144,70 @@ def require_auth(request: Request) -> dict:
     return user
 
 
-# ---------- Google OAuth HTTP helpers ----------
+# ---------- GitHub OAuth HTTP helpers ----------
 
-GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_USER_URL = "https://api.github.com/user"
+GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 
 
-def build_google_consent_url(state: str, redirect_uri: str) -> str:
+def build_github_consent_url(state: str, redirect_uri: str) -> str:
     from urllib.parse import urlencode
     params = {
-        "client_id": os.environ["GOOGLE_CLIENT_ID"],
+        "client_id": os.environ["GITHUB_CLIENT_ID"],
         "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
+        "scope": "read:user user:email",
         "state": state,
-        "prompt": "select_account",
-        "access_type": "online",
-        "include_granted_scopes": "true",
+        "allow_signup": "false",
     }
-    return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
+    return f"{GITHUB_AUTH_URL}?{urlencode(params)}"
 
 
 def exchange_code_for_token(code: str, redirect_uri: str) -> dict:
     with httpx.Client(timeout=15.0) as c:
         r = c.post(
-            GOOGLE_TOKEN_URL,
+            GITHUB_TOKEN_URL,
             data={
                 "code": code,
-                "client_id": os.environ["GOOGLE_CLIENT_ID"],
-                "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+                "client_id": os.environ["GITHUB_CLIENT_ID"],
+                "client_secret": os.environ["GITHUB_CLIENT_SECRET"],
                 "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
             },
+            headers={"Accept": "application/json"},
         )
         r.raise_for_status()
         return r.json()
 
 
-def fetch_userinfo(access_token: str) -> dict:
+def fetch_user(access_token: str) -> dict:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     with httpx.Client(timeout=15.0) as c:
-        r = c.get(GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"})
+        r = c.get(GITHUB_USER_URL, headers=headers)
         r.raise_for_status()
         return r.json()
+
+
+def fetch_primary_verified_email(access_token: str) -> Optional[str]:
+    """Returns the user's primary verified email, or None if none exists."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    with httpx.Client(timeout=15.0) as c:
+        r = c.get(GITHUB_EMAILS_URL, headers=headers)
+        r.raise_for_status()
+        emails = r.json() or []
+    for e in emails:
+        if e.get("primary") and e.get("verified"):
+            return (e.get("email") or "").lower()
+    # Fall back to any verified email
+    for e in emails:
+        if e.get("verified"):
+            return (e.get("email") or "").lower()
+    return None

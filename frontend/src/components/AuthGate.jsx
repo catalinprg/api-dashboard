@@ -67,27 +67,24 @@ function LoginScreen() {
         <div className="font-semibold text-lg mb-1">API Dashboard</div>
         <div className="text-xs text-ink-400 mb-6">Sign in to continue.</div>
         <a
-          href="/api/auth/google/start"
+          href="/api/auth/github/start"
           className="btn-primary w-full inline-flex items-center justify-center gap-2"
         >
-          <GoogleG /> Continue with Google
+          <GitHubMark /> Continue with GitHub
         </a>
         {err && <div className="mt-3 text-xs text-red-700 bg-red-100 border border-red-300 rounded-md p-2">{err}</div>}
         <div className="mt-6 text-[11px] text-ink-400">
-          Access is limited to the allowlisted email configured on the server.
+          Access is limited to the allowlist configured on the server.
         </div>
       </div>
     </div>
   )
 }
 
-function GoogleG() {
+function GitHubMark() {
   return (
-    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
-      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C33.6 6.3 29 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/>
-      <path fill="#FF3D00" d="M6.3 14.1l6.6 4.8c1.8-4 5.6-6.9 10.1-6.9 3 0 5.8 1.1 7.9 3l5.7-5.7C33.6 6.3 29 4 24 4 16.3 4 9.7 8.4 6.3 14.1z"/>
-      <path fill="#4CAF50" d="M24 44c5 0 9.5-1.9 12.9-5l-6-4.9C28.9 35.5 26.6 36 24 36c-5.3 0-9.7-3.3-11.3-8l-6.5 5C9.6 39.6 16.2 44 24 44z"/>
-      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.3-4.1 5.8l6 4.9c-.4.4 6.8-4.9 6.8-14.7 0-1.3-.1-2.3-.4-3.5z"/>
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
     </svg>
   )
 }
