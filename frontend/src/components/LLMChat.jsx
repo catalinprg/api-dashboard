@@ -664,9 +664,9 @@ export default function LLMChat({ providers }) {
       )}
 
       {/* Chat area */}
-      <div className="col-span-12 lg:col-span-7 space-y-4">
+      <div className="col-span-12 lg:col-span-7 space-y-4 min-w-0">
         <div className="card p-4 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 [&>*]:min-w-0">
             <div>
               <label className="label">Provider</label>
               <select className="select" value={providerId} onChange={(e) => onProviderChange(e.target.value)}>
@@ -729,7 +729,7 @@ export default function LLMChat({ providers }) {
                 <label className="label">System prompt (optional)</label>
                 <textarea className="textarea text-sm" rows={2} value={system} onChange={(e) => setSystem(e.target.value)} onBlur={() => persistSessionMeta({ system_prompt: system })} placeholder="You are a helpful assistant." />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 [&>*]:min-w-0">
                 <div>
                   <label className="label">Temperature</label>
                   <input className="input" type="number" step="0.1" min="0" max="2" value={temperature} onChange={(e) => setTemperature(e.target.value)} onBlur={() => persistSessionMeta({ temperature: String(temperature) })} />
@@ -829,11 +829,11 @@ export default function LLMChat({ providers }) {
           )}
 
           <div className="p-3 border-t border-ink-700">
-            <div className="flex gap-2">
+            <div className="flex gap-2 min-w-0">
               <input ref={fileRef} type="file" accept="image/*,text/*,.txt,.md,.json,.csv" multiple className="hidden" onChange={onFilesPicked} />
-              <button className="btn-secondary" onClick={() => fileRef.current?.click()} title="Attach file or image">📎</button>
+              <button className="btn-secondary shrink-0" onClick={() => fileRef.current?.click()} title="Attach file or image">📎</button>
               <textarea
-                className="textarea text-sm !font-sans flex-1"
+                className="textarea text-sm !font-sans flex-1 min-w-0"
                 rows={2}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -842,10 +842,10 @@ export default function LLMChat({ providers }) {
                 disabled={streaming}
               />
               {streaming ? (
-                <button className="btn-danger self-stretch" onClick={stop}>Stop</button>
+                <button className="btn-danger self-stretch shrink-0" onClick={stop}>Stop</button>
               ) : (
                 <button
-                  className="btn-primary self-stretch"
+                  className="btn-primary self-stretch shrink-0"
                   onClick={send}
                   disabled={(() => {
                     if (!providerId) return true
@@ -884,7 +884,7 @@ export default function LLMChat({ providers }) {
       </div>
 
       {/* Right: raw response — inline on desktop, collapsible on mobile */}
-      <div className="col-span-12 lg:col-span-3">
+      <div className="col-span-12 lg:col-span-3 min-w-0">
         <div className="hidden lg:block">
           <ResponseView response={lastResponse} loading={streaming && !streamText} />
         </div>
