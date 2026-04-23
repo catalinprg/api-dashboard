@@ -46,6 +46,18 @@ export const api = {
   exportConfig: (includeKeys = true) => request(`/api/config/export?include_keys=${includeKeys ? 'true' : 'false'}`),
   importConfig: (data) => request('/api/config/import', { method: 'POST', body: data }),
   importSpec: (data) => request('/api/config/import-spec', { method: 'POST', body: data }),
+  // Data-driven Runs
+  listRuns: () => request('/api/runs'),
+  getRun: (id) => request(`/api/runs/${id}`),
+  createRun: (data) => request('/api/runs', { method: 'POST', body: data }),
+  updateRun: (id, data) => request(`/api/runs/${id}`, { method: 'PATCH', body: data }),
+  deleteRun: (id) => request(`/api/runs/${id}`, { method: 'DELETE' }),
+  previewRun: (id) => request(`/api/runs/${id}/preview`, { method: 'POST' }),
+  executeRun: (id, sync = false) => request(`/api/runs/${id}/execute${sync ? '?sync=true' : ''}`, { method: 'POST' }),
+  listRunExecutions: (id, limit = 50) => request(`/api/runs/${id}/executions?limit=${limit}`),
+  getRunExecution: (runId, execId) => request(`/api/runs/${runId}/executions/${execId}`),
+  cancelRunExecution: (runId, execId) => request(`/api/runs/${runId}/executions/${execId}/cancel`, { method: 'POST' }),
+  deleteRunExecution: (runId, execId) => request(`/api/runs/${runId}/executions/${execId}`, { method: 'DELETE' }),
   // Scheduled jobs
   listScheduledJobs: () => request('/api/scheduled-jobs'),
   createScheduledJob: (data) => request('/api/scheduled-jobs', { method: 'POST', body: data }),

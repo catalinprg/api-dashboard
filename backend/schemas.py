@@ -152,6 +152,100 @@ class PresetOut(PresetBase):
     updated_at: str
 
 
+class RunAssertions(BaseModel):
+    """Assertion rules applied to each iteration."""
+    expected_status: Optional[List[int]] = None  # e.g. [200, 201] — any match passes
+    body_contains: Optional[str] = None          # substring must be present
+    body_not_contains: Optional[str] = None      # substring must be absent
+
+
+class RunBase(BaseModel):
+    name: str = ""
+    notes: str = ""
+    provider_id: Optional[int] = None
+    endpoint_id: Optional[int] = None
+    method: str = "GET"
+    url: str = ""
+    path: str = ""
+    headers: Dict[str, str] = Field(default_factory=dict)
+    query: Dict[str, str] = Field(default_factory=dict)
+    body: Optional[Any] = None
+    body_type: str = "json"
+    data_format: str = "csv"  # csv | tsv | json
+    data_content: str = ""
+    delay_ms: int = 0
+    stop_on_error: bool = False
+    max_rows: Optional[int] = None
+    assertions: RunAssertions = Field(default_factory=RunAssertions)
+
+
+class RunCreate(RunBase):
+    pass
+
+
+class RunUpdate(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    provider_id: Optional[int] = None
+    endpoint_id: Optional[int] = None
+    method: Optional[str] = None
+    url: Optional[str] = None
+    path: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None
+    query: Optional[Dict[str, str]] = None
+    body: Optional[Any] = None
+    body_type: Optional[str] = None
+    data_format: Optional[str] = None
+    data_content: Optional[str] = None
+    delay_ms: Optional[int] = None
+    stop_on_error: Optional[bool] = None
+    max_rows: Optional[int] = None
+    assertions: Optional[RunAssertions] = None
+
+
+class RunOut(RunBase):
+    id: int
+    created_at: str
+    updated_at: str
+    last_execution_id: Optional[int] = None
+    last_execution_status: Optional[str] = None
+
+
+class RunIterationOut(BaseModel):
+    id: int
+    execution_id: int
+    row_index: int
+    variables: Dict[str, Any]
+    method: str
+    url: str
+    status_code: int
+    latency_ms: int
+    ok: bool
+    passed: bool
+    error: str
+    response_preview: str
+    assertion_results: List[Dict[str, Any]]
+    created_at: str
+
+
+class RunExecutionOut(BaseModel):
+    id: int
+    run_id: int
+    status: str
+    started_at: str
+    finished_at: Optional[str] = None
+    error: str
+    total_rows: int
+    completed_rows: int
+    succeeded: int
+    failed: int
+    assertions: RunAssertions
+
+
+class RunExecutionDetail(RunExecutionOut):
+    iterations: List[RunIterationOut] = []
+
+
 class ScheduledJobBase(BaseModel):
     name: str = ""
     enabled: bool = True

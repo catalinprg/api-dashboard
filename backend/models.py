@@ -66,6 +66,120 @@ class RequestPreset(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class Run(Base):
+    """A data-driven request template (Postman-runner-style).
+
+    The request fields mirror HTTPInvokeRequest; data_content holds the raw
+    CSV/TSV/JSON blob. One row per execution iteration; row columns become
+    variables referenced in the template as {{column_name}}.
+    """
+    __tablename__ = "runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, default="")
+    notes = Column(Text, default="")
+
+    # Request template
+    provider_id = Column(Integer, nullable=True)
+    endpoint_id = Column(Integer, nullable=True)
+    method = Column(String, default="GET")
+    url = Column(String, default="")
+    path = Column(String, default="")
+    headers_json = Column(Text, default="{}")
+    query_json = Column(Text, default="{}")
+    body_json = Column(Text, default="")
+    body_type = Column(String, default="json")
+
+    # Data source: raw text in data_content, parsed per data_format
+    data_format = Column(String, default="csv")  # csv | tsv | json
+    data_content = Column(Text, default="")
+
+    # Execution settings
+    delay_ms = Column(Integer, default=0)           # delay between iterations
+    stop_on_error = Column(Boolean, default=False)
+    max_rows = Column(Integer, nullable=True)       # optional cap; None = no cap (enforced at limit)
+
+    # Assertions (applied to each iteration's response)
+    # JSON: {"expected_status": [200,201], "body_contains": "...", "body_not_contains": "..."}
+    assertions_json = Column(Text, default="{}")
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    executions = relationship(
+        "RunExecution",
+        back_populates="run",
+        cascade="all, delete-orphan",
+        order_by="RunExecution.id.desc()",
+    )
+
+
+class RunExecution(Base):
+    """A single execution of a Run — tracks progress + overall status."""
+    __tablename__ = "run_executions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(Integer, ForeignKey("runs.id"), nullable=False, index=True)
+
+    # Lifecycle
+    status = Column(String, default="pending")  # pending | running | completed | canceled | failed
+    started_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+    error = Column(Text, default="")
+
+    # Progress counters
+    total_rows = Column(Integer, default=0)
+    completed_rows = Column(Integer, default=0)
+    succeeded = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+
+    # Cancel signal — flipped by the cancel endpoint, polled each iteration.
+    cancel_requested = Column(Boolean, default=False)
+
+    # Snapshot of assertions used at execution time (so later schema changes don't
+    # rewrite history).
+    assertions_json = Column(Text, default="{}")
+
+    run = relationship("Run", back_populates="executions")
+    iterations = relationship(
+        "RunIteration",
+        back_populates="execution",
+        cascade="all, delete-orphan",
+        order_by="RunIteration.row_index.asc()",
+    )
+
+
+class RunIteration(Base):
+    """One row of the data file, run through the template."""
+    __tablename__ = "run_iterations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    execution_id = Column(Integer, ForeignKey("run_executions.id"), nullable=False, index=True)
+    row_index = Column(Integer, nullable=False)
+
+    # Input row (the CSV row as a dict — small, OK to store JSON)
+    variables_json = Column(Text, default="{}")
+
+    # Resolved request (after substitution)
+    method = Column(String, default="")
+    url = Column(String, default="")
+
+    # Response
+    status_code = Column(Integer, default=0)
+    latency_ms = Column(Integer, default=0)
+    ok = Column(Boolean, default=False)           # HTTP-level success
+    passed = Column(Boolean, default=False)       # assertions pass AND http ok
+    error = Column(Text, default="")
+    # Response body preview, capped in code.
+    response_preview = Column(Text, default="")
+    # Per-assertion pass/fail detail.
+    assertion_results_json = Column(Text, default="[]")
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    execution = relationship("RunExecution", back_populates="iterations")
+
+
 class ScheduledJob(Base):
     __tablename__ = "scheduled_jobs"
 
