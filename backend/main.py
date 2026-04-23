@@ -1699,3 +1699,600 @@ def run_scheduled_job_now(job_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(j)
     return {"ok": summary["ok"], "status_code": summary["status_code"], "latency_ms": summary["latency_ms"], "error": summary["error"], "job": _sched_job_to_out(j)}
+
+
+# ---------- Data-driven Runs (Postman-runner style) ----------
+#
+# A Run is a request template + a data file + assertion rules. Executing a run
+# iterates over the rows of the data file, substitutes {{column}} variables in
+# the template per row, and records the outcome.
+
+import csv as _csv
+import io as _io
+import threading as _threading
+
+_RUN_DATA_MAX_BYTES = 2 * 1024 * 1024   # 2 MB cap on data blobs
+_RUN_ROW_HARD_LIMIT = 10_000            # hard safety cap on iterations
+_RUN_BODY_PREVIEW_BYTES = 4 * 1024      # per-iteration response preview size
+
+
+def _parse_assertions_raw(raw: Optional[str]) -> Dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        val = json.loads(raw)
+        return val if isinstance(val, dict) else {}
+    except Exception:
+        return {}
+
+
+def _assertions_from_payload(a: Optional[schemas.RunAssertions]) -> Dict[str, Any]:
+    if a is None:
+        return {}
+    d = a.model_dump(exclude_none=True)
+    # Normalize empty strings to absent
+    for k in ("body_contains", "body_not_contains"):
+        if k in d and not d[k]:
+            d.pop(k)
+    if "expected_status" in d and not d["expected_status"]:
+        d.pop("expected_status")
+    return d
+
+
+def _parse_run_rows(content: str, fmt: str) -> List[Dict[str, str]]:
+    """Parse the saved data_content into a list of row-dicts.
+
+    Supported formats:
+      - csv / tsv: header row defines column names → variables
+      - json:      must be a top-level array of objects
+    """
+    content = (content or "").lstrip("\ufeff")  # strip BOM
+    fmt = (fmt or "csv").lower()
+    if fmt == "json":
+        try:
+            data = json.loads(content or "[]")
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"Data is not valid JSON: {e}")
+        if not isinstance(data, list):
+            raise HTTPException(400, "JSON data must be a top-level array of objects")
+        rows: List[Dict[str, str]] = []
+        for i, item in enumerate(data):
+            if not isinstance(item, dict):
+                raise HTTPException(400, f"Row {i} is not an object")
+            rows.append({str(k): "" if v is None else str(v) if not isinstance(v, str) else v for k, v in item.items()})
+        return rows
+
+    if fmt not in {"csv", "tsv"}:
+        raise HTTPException(400, f"Unsupported data format: {fmt}")
+    delim = "\t" if fmt == "tsv" else ","
+    reader = _csv.DictReader(_io.StringIO(content), delimiter=delim)
+    out: List[Dict[str, str]] = []
+    for i, row in enumerate(reader):
+        # DictReader gives None for missing fields; normalize.
+        cleaned: Dict[str, str] = {}
+        for k, v in row.items():
+            if k is None:
+                continue
+            cleaned[str(k).strip()] = "" if v is None else str(v)
+        out.append(cleaned)
+    if reader.fieldnames is None and content.strip():
+        raise HTTPException(400, "Could not parse CSV — first non-empty line must be a header row")
+    return out
+
+
+_VAR_PAT = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
+
+
+def _collect_template_vars(run: models.Run) -> List[str]:
+    """Return distinct variable names referenced in the request template."""
+    parts = [run.url or "", run.path or "", run.headers_json or "", run.query_json or "", run.body_json or ""]
+    seen = set()
+    out: List[str] = []
+    for p in parts:
+        for m in _VAR_PAT.finditer(p):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+    return out
+
+
+def _apply_row_vars(run: models.Run, row: Dict[str, str]) -> schemas.HTTPInvokeRequest:
+    """Build an HTTPInvokeRequest with {{var}} substituted from the row."""
+    def _sub(s: str) -> str:
+        return _subst_str(s or "", row)
+
+    headers: Dict[str, Any] = {}
+    try:
+        headers = json.loads(run.headers_json or "{}") or {}
+    except Exception:
+        headers = {}
+    query: Dict[str, Any] = {}
+    try:
+        query = json.loads(run.query_json or "{}") or {}
+    except Exception:
+        query = {}
+    body_val: Any = None
+    if run.body_json:
+        try:
+            body_val = json.loads(run.body_json)
+        except Exception:
+            body_val = run.body_json
+
+    return schemas.HTTPInvokeRequest(
+        provider_id=run.provider_id,
+        endpoint_id=run.endpoint_id,
+        method=(run.method or "GET"),
+        url=_sub(run.url) if run.url else None,
+        path=_sub(run.path) if run.path else None,
+        headers={str(k): _sub(str(v)) for k, v in (headers if isinstance(headers, dict) else {}).items()},
+        query={str(k): _sub(str(v)) for k, v in (query if isinstance(query, dict) else {}).items()},
+        body=_subst_any(body_val, row),
+        body_type=run.body_type or "json",
+    )
+
+
+def _evaluate_assertions(rules: Dict[str, Any], resp: schemas.InvokeResponse) -> List[Dict[str, Any]]:
+    """Return a list of {name, passed, message} — empty list if no rules."""
+    results: List[Dict[str, Any]] = []
+    if not rules:
+        return results
+    expected = rules.get("expected_status") or []
+    if expected:
+        ok = int(resp.status_code or 0) in set(int(x) for x in expected)
+        results.append({
+            "name": "expected_status",
+            "passed": bool(ok),
+            "message": f"got {resp.status_code}, expected one of {expected}",
+        })
+    body_text = ""
+    if isinstance(resp.body, str):
+        body_text = resp.body
+    elif resp.body is not None:
+        try:
+            body_text = json.dumps(resp.body)
+        except Exception:
+            body_text = str(resp.body)
+    needle = rules.get("body_contains")
+    if needle:
+        ok = needle in body_text
+        results.append({"name": "body_contains", "passed": ok, "message": "" if ok else f"substring {needle!r} not in response"})
+    forbidden = rules.get("body_not_contains")
+    if forbidden:
+        ok = forbidden not in body_text
+        results.append({"name": "body_not_contains", "passed": ok, "message": "" if ok else f"forbidden substring {forbidden!r} present"})
+    return results
+
+
+def _make_preview(resp: schemas.InvokeResponse) -> str:
+    if resp.body is None:
+        return ""
+    if isinstance(resp.body, str):
+        s = resp.body
+    else:
+        try:
+            s = json.dumps(resp.body, ensure_ascii=False)
+        except Exception:
+            s = str(resp.body)
+    if len(s) > _RUN_BODY_PREVIEW_BYTES:
+        s = s[:_RUN_BODY_PREVIEW_BYTES] + "\n…[truncated]"
+    return s
+
+
+def _run_to_out(r: models.Run) -> dict:
+    def _parse(raw, default):
+        if not raw:
+            return default
+        try:
+            val = json.loads(raw)
+            return val if isinstance(val, type(default)) else default
+        except Exception:
+            return default
+    body_val: Any = None
+    if r.body_json:
+        try:
+            body_val = json.loads(r.body_json)
+        except Exception:
+            body_val = r.body_json
+    last = r.executions[0] if r.executions else None
+    return {
+        "id": r.id,
+        "name": r.name or "",
+        "notes": r.notes or "",
+        "provider_id": r.provider_id,
+        "endpoint_id": r.endpoint_id,
+        "method": r.method or "GET",
+        "url": r.url or "",
+        "path": r.path or "",
+        "headers": _parse(r.headers_json, {}),
+        "query": _parse(r.query_json, {}),
+        "body": body_val,
+        "body_type": r.body_type or "json",
+        "data_format": r.data_format or "csv",
+        "data_content": r.data_content or "",
+        "delay_ms": int(r.delay_ms or 0),
+        "stop_on_error": bool(r.stop_on_error),
+        "max_rows": r.max_rows,
+        "assertions": _parse_assertions_raw(r.assertions_json),
+        "created_at": r.created_at.isoformat() if r.created_at else "",
+        "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+        "last_execution_id": last.id if last else None,
+        "last_execution_status": last.status if last else None,
+    }
+
+
+def _execution_to_out(e: models.RunExecution, include_iterations: bool = False) -> dict:
+    out = {
+        "id": e.id,
+        "run_id": e.run_id,
+        "status": e.status or "pending",
+        "started_at": e.started_at.isoformat() if e.started_at else "",
+        "finished_at": e.finished_at.isoformat() if e.finished_at else None,
+        "error": e.error or "",
+        "total_rows": int(e.total_rows or 0),
+        "completed_rows": int(e.completed_rows or 0),
+        "succeeded": int(e.succeeded or 0),
+        "failed": int(e.failed or 0),
+        "assertions": _parse_assertions_raw(e.assertions_json),
+    }
+    if include_iterations:
+        out["iterations"] = [_iteration_to_out(i) for i in e.iterations]
+    return out
+
+
+def _iteration_to_out(it: models.RunIteration) -> dict:
+    try:
+        vars_ = json.loads(it.variables_json or "{}")
+    except Exception:
+        vars_ = {}
+    try:
+        ar = json.loads(it.assertion_results_json or "[]")
+    except Exception:
+        ar = []
+    return {
+        "id": it.id,
+        "execution_id": it.execution_id,
+        "row_index": it.row_index,
+        "variables": vars_ if isinstance(vars_, dict) else {},
+        "method": it.method or "",
+        "url": it.url or "",
+        "status_code": int(it.status_code or 0),
+        "latency_ms": int(it.latency_ms or 0),
+        "ok": bool(it.ok),
+        "passed": bool(it.passed),
+        "error": it.error or "",
+        "response_preview": it.response_preview or "",
+        "assertion_results": ar if isinstance(ar, list) else [],
+        "created_at": it.created_at.isoformat() if it.created_at else "",
+    }
+
+
+def _apply_run_payload(r: models.Run, data: Dict[str, Any]) -> None:
+    for k in ("name", "notes", "provider_id", "endpoint_id", "method", "url",
+              "path", "body_type", "data_format", "delay_ms", "stop_on_error", "max_rows"):
+        if k in data:
+            setattr(r, k, data[k])
+    if "headers" in data:
+        r.headers_json = json.dumps(data["headers"] or {})
+    if "query" in data:
+        r.query_json = json.dumps(data["query"] or {})
+    if "body" in data:
+        r.body_json = json.dumps(data["body"]) if data["body"] is not None else ""
+    if "data_content" in data:
+        content = data["data_content"] or ""
+        if len(content.encode("utf-8", errors="ignore")) > _RUN_DATA_MAX_BYTES:
+            raise HTTPException(400, f"data_content exceeds {_RUN_DATA_MAX_BYTES} bytes")
+        r.data_content = content
+    if "assertions" in data and data["assertions"] is not None:
+        r.assertions_json = json.dumps(data["assertions"])
+
+
+@app.get("/api/runs", response_model=List[schemas.RunOut])
+def list_runs(db: Session = Depends(get_db)):
+    return [_run_to_out(r) for r in db.query(models.Run).order_by(models.Run.updated_at.desc()).all()]
+
+
+@app.post("/api/runs", response_model=schemas.RunOut)
+def create_run(payload: schemas.RunCreate, db: Session = Depends(get_db)):
+    r = models.Run()
+    data = payload.model_dump()
+    data["assertions"] = _assertions_from_payload(payload.assertions)
+    _apply_run_payload(r, data)
+    # Validate data up front so broken rows can't be saved unnoticed.
+    _parse_run_rows(r.data_content or "", r.data_format or "csv")
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    return _run_to_out(r)
+
+
+@app.get("/api/runs/{run_id}", response_model=schemas.RunOut)
+def get_run(run_id: int, db: Session = Depends(get_db)):
+    r = db.get(models.Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    return _run_to_out(r)
+
+
+@app.patch("/api/runs/{run_id}", response_model=schemas.RunOut)
+def update_run(run_id: int, payload: schemas.RunUpdate, db: Session = Depends(get_db)):
+    r = db.get(models.Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    data = payload.model_dump(exclude_unset=True)
+    if "assertions" in data:
+        data["assertions"] = _assertions_from_payload(payload.assertions)
+    _apply_run_payload(r, data)
+    # Re-validate whenever data / format changes.
+    if "data_content" in data or "data_format" in data:
+        _parse_run_rows(r.data_content or "", r.data_format or "csv")
+    db.commit()
+    db.refresh(r)
+    return _run_to_out(r)
+
+
+@app.delete("/api/runs/{run_id}")
+def delete_run(run_id: int, db: Session = Depends(get_db)):
+    r = db.get(models.Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    db.delete(r)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/runs/{run_id}/preview")
+def preview_run(run_id: int, db: Session = Depends(get_db)):
+    """Dry-run: parse rows + return the variables used by the template + the first row rendered."""
+    r = db.get(models.Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    rows = _parse_run_rows(r.data_content or "", r.data_format or "csv")
+    template_vars = _collect_template_vars(r)
+    columns = list(rows[0].keys()) if rows else []
+    missing = [v for v in template_vars if v not in columns]
+    unused = [c for c in columns if c not in template_vars]
+    rendered = None
+    if rows:
+        try:
+            req = _apply_row_vars(r, rows[0])
+            rendered = {
+                "method": req.method, "url": req.url, "path": req.path,
+                "headers": req.headers, "query": req.query, "body": req.body,
+            }
+        except Exception as e:
+            rendered = {"error": str(e)}
+    return {
+        "row_count": len(rows),
+        "columns": columns,
+        "template_variables": template_vars,
+        "missing_variables": missing,
+        "unused_columns": unused,
+        "first_row_rendered": rendered,
+    }
+
+
+def _execute_iteration(db: Session, run: models.Run, execution: models.RunExecution, row_index: int, row: Dict[str, str], rules: Dict[str, Any]) -> models.RunIteration:
+    """Run one iteration end-to-end: invoke → evaluate → persist."""
+    try:
+        invoke_payload = _apply_row_vars(run, row)
+    except Exception as e:
+        it = models.RunIteration(
+            execution_id=execution.id,
+            row_index=row_index,
+            variables_json=json.dumps(row),
+            method=run.method or "",
+            url=run.url or "",
+            status_code=0,
+            latency_ms=0,
+            ok=False,
+            passed=False,
+            error=f"template render failed: {e}",
+            response_preview="",
+            assertion_results_json="[]",
+        )
+        db.add(it)
+        db.commit()
+        db.refresh(it)
+        return it
+
+    try:
+        resp = invoke_http(invoke_payload, db)
+    except HTTPException as e:
+        resp = schemas.InvokeResponse(
+            ok=False, status_code=e.status_code, latency_ms=0,
+            headers={}, body=None, error=str(e.detail),
+        )
+    except Exception as e:
+        resp = schemas.InvokeResponse(
+            ok=False, status_code=0, latency_ms=0,
+            headers={}, body=None, error=str(e)[:500],
+        )
+
+    assertion_results = _evaluate_assertions(rules, resp)
+    assertion_pass = all(a.get("passed") for a in assertion_results) if assertion_results else True
+    passed = bool(resp.ok) and assertion_pass
+
+    it = models.RunIteration(
+        execution_id=execution.id,
+        row_index=row_index,
+        variables_json=json.dumps(row),
+        method=(resp.request.method if resp.request else (invoke_payload.method or "")) or "",
+        url=(resp.request.url if resp.request else (invoke_payload.url or "")) or "",
+        status_code=int(resp.status_code or 0),
+        latency_ms=int(resp.latency_ms or 0),
+        ok=bool(resp.ok),
+        passed=passed,
+        error=resp.error or "",
+        response_preview=_make_preview(resp),
+        assertion_results_json=json.dumps(assertion_results),
+    )
+    db.add(it)
+    db.commit()
+    db.refresh(it)
+    return it
+
+
+def _run_execute_worker(run_id: int, execution_id: int) -> None:
+    """Background thread worker: iterates over rows, writes progress to DB."""
+    db = SessionLocal()
+    try:
+        execution = db.get(models.RunExecution, execution_id)
+        if not execution:
+            return
+        run = db.get(models.Run, run_id)
+        if not run:
+            execution.status = "failed"
+            execution.error = "run no longer exists"
+            execution.finished_at = _dt.utcnow()
+            db.commit()
+            return
+
+        execution.status = "running"
+        db.commit()
+
+        try:
+            rows = _parse_run_rows(run.data_content or "", run.data_format or "csv")
+        except HTTPException as e:
+            execution.status = "failed"
+            execution.error = str(e.detail)[:500]
+            execution.finished_at = _dt.utcnow()
+            db.commit()
+            return
+        except Exception as e:
+            execution.status = "failed"
+            execution.error = str(e)[:500]
+            execution.finished_at = _dt.utcnow()
+            db.commit()
+            return
+
+        cap = run.max_rows if (run.max_rows and run.max_rows > 0) else _RUN_ROW_HARD_LIMIT
+        rows = rows[:min(cap, _RUN_ROW_HARD_LIMIT)]
+        execution.total_rows = len(rows)
+        db.commit()
+
+        rules = _parse_assertions_raw(execution.assertions_json)
+        delay = max(0, int(run.delay_ms or 0))
+
+        for idx, row in enumerate(rows):
+            # Cancellation check — refresh from DB to pick up flag changes.
+            db.refresh(execution)
+            if execution.cancel_requested:
+                execution.status = "canceled"
+                break
+
+            it = _execute_iteration(db, run, execution, idx, row, rules)
+
+            execution.completed_rows = idx + 1
+            if it.passed:
+                execution.succeeded = (execution.succeeded or 0) + 1
+            else:
+                execution.failed = (execution.failed or 0) + 1
+            db.commit()
+
+            if run.stop_on_error and not it.passed:
+                break
+
+            if delay and idx < len(rows) - 1:
+                time.sleep(delay / 1000.0)
+
+        if execution.status == "running":
+            execution.status = "completed"
+        execution.finished_at = _dt.utcnow()
+        db.commit()
+    except Exception as e:
+        try:
+            execution = db.get(models.RunExecution, execution_id)
+            if execution:
+                execution.status = "failed"
+                execution.error = str(e)[:500]
+                execution.finished_at = _dt.utcnow()
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+# Track active worker threads so tests can wait for them; not exposed to HTTP.
+_run_worker_threads: Dict[int, _threading.Thread] = {}
+
+
+@app.post("/api/runs/{run_id}/execute", response_model=schemas.RunExecutionOut)
+def execute_run(run_id: int, db: Session = Depends(get_db), sync: bool = False):
+    r = db.get(models.Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    # Fail early if the data / format is broken.
+    _parse_run_rows(r.data_content or "", r.data_format or "csv")
+
+    execution = models.RunExecution(
+        run_id=r.id,
+        status="pending",
+        started_at=_dt.utcnow(),
+        assertions_json=r.assertions_json or "{}",
+    )
+    db.add(execution)
+    db.commit()
+    db.refresh(execution)
+    exec_id = execution.id
+
+    if sync:
+        _run_execute_worker(r.id, exec_id)
+        db.refresh(execution)
+    else:
+        t = _threading.Thread(
+            target=_run_execute_worker,
+            args=(r.id, exec_id),
+            name=f"run-exec-{exec_id}",
+            daemon=True,
+        )
+        _run_worker_threads[exec_id] = t
+        t.start()
+    return _execution_to_out(execution)
+
+
+@app.get("/api/runs/{run_id}/executions", response_model=List[schemas.RunExecutionOut])
+def list_executions(run_id: int, limit: int = 50, db: Session = Depends(get_db)):
+    r = db.get(models.Run, run_id)
+    if not r:
+        raise HTTPException(404, "Run not found")
+    q = (
+        db.query(models.RunExecution)
+        .filter(models.RunExecution.run_id == run_id)
+        .order_by(models.RunExecution.id.desc())
+        .limit(max(1, min(limit, 200)))
+    )
+    return [_execution_to_out(e) for e in q.all()]
+
+
+@app.get("/api/runs/{run_id}/executions/{execution_id}", response_model=schemas.RunExecutionDetail)
+def get_execution(run_id: int, execution_id: int, db: Session = Depends(get_db)):
+    e = db.get(models.RunExecution, execution_id)
+    if not e or e.run_id != run_id:
+        raise HTTPException(404, "Execution not found")
+    return _execution_to_out(e, include_iterations=True)
+
+
+@app.post("/api/runs/{run_id}/executions/{execution_id}/cancel")
+def cancel_execution(run_id: int, execution_id: int, db: Session = Depends(get_db)):
+    e = db.get(models.RunExecution, execution_id)
+    if not e or e.run_id != run_id:
+        raise HTTPException(404, "Execution not found")
+    if e.status in {"completed", "canceled", "failed"}:
+        return {"ok": True, "status": e.status}
+    e.cancel_requested = True
+    db.commit()
+    return {"ok": True, "status": e.status}
+
+
+@app.delete("/api/runs/{run_id}/executions/{execution_id}")
+def delete_execution(run_id: int, execution_id: int, db: Session = Depends(get_db)):
+    e = db.get(models.RunExecution, execution_id)
+    if not e or e.run_id != run_id:
+        raise HTTPException(404, "Execution not found")
+    if e.status not in {"completed", "canceled", "failed"}:
+        raise HTTPException(400, f"Cannot delete execution while status is '{e.status}' — cancel it first")
+    db.delete(e)
+    db.commit()
+    return {"ok": True}

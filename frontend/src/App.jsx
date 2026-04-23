@@ -6,6 +6,7 @@ import HTTPPanel from './components/HTTPPanel.jsx'
 import GraphQLPanel from './components/GraphQLPanel.jsx'
 import WebhookPanel from './components/WebhookPanel.jsx'
 import ScheduledPanel from './components/ScheduledPanel.jsx'
+import RunsPanel from './components/RunsPanel.jsx'
 import HistoryPanel from './components/HistoryPanel.jsx'
 import AuthGate from './components/AuthGate.jsx'
 import { api } from './api.js'
@@ -13,6 +14,7 @@ import { api } from './api.js'
 const VIEW_LABELS = {
   http: 'HTTP / REST',
   graphql: 'GraphQL',
+  runs: 'Runs',
   webhooks: 'Webhooks',
   scheduled: 'Scheduled',
   history: 'History',
@@ -88,6 +90,8 @@ function Shell({ user }) {
           <HistoryPanel />
         ) : view === 'graphql' ? (
           <GraphQLPanel providers={providers} />
+        ) : view === 'runs' ? (
+          <RunsPanel />
         ) : view === 'webhooks' ? (
           <WebhookPanel />
         ) : view === 'scheduled' ? (
