@@ -13,9 +13,11 @@ body {
   overscroll-behavior-y: none;
 }
 
-input, textarea, select { font-size: 16px; } /* prevent iOS zoom on focus */
-@media (min-width: 640px) {
-  input, textarea, select { font-size: 14px; }
+/* Prevent iOS Safari from auto-zooming when focusing a form field.
+   !important is required because Tailwind's text-* utilities have higher
+   specificity than the plain type selector. */
+@media (max-width: 639px) {
+  input, textarea, select { font-size: 16px !important; }
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
